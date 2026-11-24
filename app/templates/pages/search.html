@@ -1,0 +1,209 @@
+{% extends "layout.html" %}
+{% block title %}数据检索 · 九豆高质量数据资产平台{% endblock %}
+{% block body %}
+<div class="jd-page">
+  <div class="jd-crumb">数据资产 <span>/</span> <b>数据检索</b></div>
+
+  <div class="jd-toolbar">
+    <div class="jd-search" style="width:280px">
+      <svg><use href="/static/img/icons.svg#i-search"></use></svg>
+      <input class="jd-input" id="kw" placeholder="名称 / 编码 / 标签 / 说明">
+    </div>
+    <select class="jd-select" id="fDomain" style="width:140px"></select>
+    <select class="jd-select" id="fModality" style="width:120px"></select>
+    <select class="jd-select" id="fClass" style="width:120px"></select>
+    <select class="jd-select" id="fScore" style="width:130px">
+      <option value="">不限质量分</option>
+      <option value="60">≥ 60 分</option>
+      <option value="80">≥ 80 分</option>
+      <option value="90">≥ 90 分</option>
+    </select>
+    <select class="jd-select" id="fSort" style="width:140px">
+      <option value="updated">按更新时间</option>
+      <option value="score">按质量分</option>
+      <option value="samples">按样本量</option>
+      <option value="name">按名称</option>
+    </select>
+    <button class="jd-btn jd-btn--primary" id="btnSearch">检索</button>
+    <button class="jd-btn" id="btnReset">重置</button>
+  </div>
+
+  <div style="display:grid;grid-template-columns:1fr 246px;gap:12px;align-items:start">
+    <div class="jd-card jd-card__bd--flush" id="tbl"></div>
+    <div>
+      <div class="jd-card jd-mb12">
+        <div class="jd-card__hd"><h3>分面筛选</h3></div>
+        <div class="jd-card__bd" id="facets"><div class="jd-empty">暂无数据</div></div>
+      </div>
+      <div class="jd-card">
+        <div class="jd-card__hd"><h3>相似推荐</h3></div>
+        <div class="jd-card__bd" id="similar">
+          <div class="jd-hint">选中一个数据集后，按领域 / 模态 / 标签计算相似度并推荐</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block init %}
+var tbl;
+
+function fillSel(sel, dictCode, allLabel) {
+  $(sel).html('<option value="">' + allLabel + '</option>' + JD.dict(dictCode).map(function (o) {
+    return '<option value="' + o.value + '">' + o.label + '</option>';
+  }).join(''));
+}
+fillSel('#fDomain', 'ds_domain', '全部领域');
+fillSel('#fModality', 'ds_modality', '全部模态');
+fillSel('#fClass', 'ds_classification', '全部密级');
+
+tbl = JD.table({
+  el: '#tbl', url: '/api/asset/search', pageSize: 10,
+  columns: [
+    { field: 'dataset_name', title: '数据集', render: function (v, r) {
+      return '<b>' + JD.esc(v) + '</b><div class="jd-hint">' + JD.esc(r.dataset_code) +
+        (r.tags ? ' · ' + JD.esc(r.tags) : '') + '</div>' +
+        (r.description ? '<div class="jd-hint" style="max-width:520px;overflow:hidden;' +
+          'text-overflow:ellipsis;white-space:nowrap">' + JD.esc(r.description) + '</div>' : '');
+    }},
+    { field: 'domain_code', title: '领域 / 模态', width: 150, render: function (v, r) {
+      return JD.tag(JD.label('ds_domain', v), 'primary') + ' ' +
+        JD.tag(JD.label('ds_modality', r.modality_code));
+    }},
+    { field: 'class_code', title: '密级', width: 84, render: function (v) {
+      var t = v === 'CONFIDENTIAL' ? 'danger' : (v === 'INTERNAL' ? 'warning' : 'success');
+      return '<span class="jd-tag jd-tag--' + t + '">' + JD.label('ds_classification', v) + '</span>';
+    }},
+    { field: 'quality_score', title: '质量', width: 128, render: function (v, r) {
+      return JD.qualityTag(v, r.quality_status);
+    }},
+    { field: 'sample_count', title: '样本', width: 90, className: 'num', render: function (v) {
+      return JD.fmtNum(v);
+    }},
+    { field: 'latest_version', title: '最新版本', width: 96, render: function (v) {
+      return v ? '<span class="jd-tag">' + JD.esc(v) + '</span>' : '<span class="jd-hint">-</span>';
+    }},
+    { field: 'owner_name', title: '负责人', width: 86 },
+    { field: 'updated_at', title: '更新', width: 130, render: function (v) {
+      return '<span class="jd-hint">' + JD.fmtTime(v) + '</span>';
+    }}
+  ],
+  ops: [
+    { icon: 'eye', text: '查看详情', needRow: true, onClick: function (r) { openDetail(r); } },
+    { icon: 'link', text: '相似推荐', needRow: true, onClick: function (r) { loadSimilar(r); } },
+    { icon: 'download', text: '下载最新版', needRow: true, perm: 'dataset:download',
+      onClick: function (r) {
+        if (!r.latest_version_id) { JD.alert('暂无版本', '该数据集还没有可用版本', 'warning'); return; }
+        window.open('/api/ds/download?versionId=' + r.latest_version_id, '_blank');
+      }},
+    { icon: 'refresh', text: '刷新', onClick: function () { tbl.clearSelected(); doSearch(); } }
+  ],
+  hint: '检索结果覆盖全部可见数据集；选中一行可查看详情或做相似推荐',
+  onLoaded: function (d) {
+    renderFacets(d);
+    JD.bindPerms($('#tbl'));
+  }
+});
+
+function renderFacets(d) {
+  // 分面来自接口的 facets 字段，需在请求后单独取一次，这里用最近一次的结果
+  if (!d || !d.facets) return;
+}
+
+var facetsCache = null;
+function doSearch() {
+  tbl.setParams({
+    keyword: $.trim($('#kw').val()), domain: $('#fDomain').val(),
+    modality: $('#fModality').val(), classification: $('#fClass').val(),
+    minScore: $('#fScore').val(), sort: $('#fSort').val()
+  }).then(function () { });
+}
+
+$('#btnSearch').on('click', doSearch);
+$('#btnReset').on('click', function () {
+  $('#kw').val(''); $('#fDomain').val(''); $('#fModality').val(''); $('#fClass').val('');
+  $('#fScore').val(''); $('#fSort').val('updated');
+  $('#similar').html('<div class="jd-hint">选中一个数据集后，按领域 / 模态 / 标签计算相似度并推荐</div>');
+  doSearch();
+});
+$('#kw').on('keydown', function (e) { if (e.key === 'Enter') doSearch(); });
+
+/* 分面：直接复用检索接口，取 facets */
+function loadFacets() {
+  JD.get('/api/asset/search', { page: 1, size: 1 }, { silent: true }).then(function (d) {
+    facetsCache = d.facets || {};
+    var map = { domain: 'ds_domain', classification: 'ds_classification', modality: 'ds_modality' };
+    var names = { domain: '领域', classification: '密级', modality: '模态' };
+    var html = Object.keys(map).map(function (k) {
+      var rows = (facetsCache[k] || []).filter(function (x) { return x.k; });
+      if (!rows.length) return '';
+      return '<div class="jd-mb12"><div class="jd-hint jd-mb8">' + names[k] + '</div>' +
+        rows.map(function (x) {
+          return '<div class="jd-flex" style="cursor:pointer;padding:3px 0" data-fk="' + k +
+            '" data-fv="' + JD.esc(x.k) + '"><span style="flex:1">' +
+            JD.esc(JD.label(map[k], x.k)) + '</span><span class="jd-hint">' + x.c + '</span></div>';
+        }).join('') + '</div>';
+    }).join('');
+    $('#facets').html(html || '<div class="jd-hint">暂无可筛选维度</div>');
+  });
+}
+loadFacets();
+
+$('#facets').on('click', '[data-fk]', function () {
+  var k = $(this).data('fk'), v = $(this).data('fv');
+  var sel = { domain: '#fDomain', classification: '#fClass', modality: '#fModality' }[k];
+  $(sel).val(v);
+  doSearch();
+});
+
+function openDetail(r) {
+  JD.get('/api/ds/detail', { id: r.id }).then(function (d) {
+    var ds = d.dataset;
+    var vers = (d.versions || []).slice(0, 6).map(function (v) {
+      return '<tr><td><b>' + JD.esc(v.version_no) + '</b></td>' +
+        '<td class="num">' + JD.fmtNum(v.sample_count) + '</td>' +
+        '<td>' + JD.qualityTag(v.quality_score, v.quality_status) + '</td>' +
+        '<td class="jd-hint">' + JD.fmtTime(v.created_at) + '</td></tr>';
+    }).join('');
+    JD.dialog({
+      title: '数据集详情', width: 'jd-dialog--lg',
+      body: '<div class="jd-kv jd-mb12"><dt>名称</dt><dd><b>' + JD.esc(ds.dataset_name) + '</b></dd>' +
+        '<dt>编码</dt><dd>' + JD.esc(ds.dataset_code) + '</dd>' +
+        '<dt>领域 / 模态</dt><dd>' + JD.label('ds_domain', ds.domain_code) + ' / ' +
+        JD.label('ds_modality', ds.modality_code) + '</dd>' +
+        '<dt>密级</dt><dd>' + JD.label('ds_classification', ds.class_code) + '</dd>' +
+        '<dt>标签</dt><dd>' + JD.esc(ds.tags || '-') + '</dd>' +
+        '<dt>说明</dt><dd>' + JD.esc(ds.description || '-') + '</dd></div>' +
+        '<div class="jd-table-wrap"><table class="jd-table"><thead><tr><th>版本</th>' +
+        '<th class="num">样本</th><th>质量</th><th>创建</th></tr></thead><tbody>' +
+        (vers || '<tr><td colspan="4"><div class="jd-empty">尚无版本</div></td></tr>') +
+        '</tbody></table></div>',
+      footer: '<button class="jd-btn" data-act="close">关闭</button>',
+      onOpen: function ($m, close) { $m.on('click', '[data-act="close"]', close); }
+    });
+  });
+}
+
+function loadSimilar(r) {
+  JD.get('/api/asset/similar', { datasetId: r.id }).then(function (rows) {
+    if (!rows || !rows.length) {
+      $('#similar').html('<div class="jd-hint">没有找到相似数据集（领域 / 模态 / 标签均无交集）</div>');
+      return;
+    }
+    $('#similar').html(rows.map(function (x) {
+      return '<div style="padding:7px 0;border-bottom:1px solid var(--border-light);cursor:pointer" ' +
+        'data-id="' + x.id + '"><div><b>' + JD.esc(x.dataset_name) + '</b></div>' +
+        '<div class="jd-hint">' + JD.esc(JD.label('ds_domain', x.domain_code)) +
+        ' · 相似度 ' + x.similarity + ' · ' + JD.fmtNum(x.sample_count) + ' 样本</div></div>';
+    }).join(''));
+  });
+}
+
+$('#similar').on('click', '[data-id]', function () {
+  var id = $(this).data('id');
+  JD.get('/api/ds/detail', { id: id }).then(function (d) {
+    openDetail({ id: id, dataset_name: d.dataset.dataset_name });
+  });
+});
+{% endblock %}

@@ -1,0 +1,87 @@
+{% extends "layout.html" %}
+{% block title %}数据血缘 · 九豆高质量数据资产平台{% endblock %}
+{% block body %}
+<div class="jd-page">
+  <div class="jd-crumb">数据资产 <span>/</span> <b>数据血缘</b></div>
+
+  <div class="jd-notice jd-mb12">
+    <b>血缘自动采集：</b>每次上传/加工生成新版本时，系统按「输入 manifest → 输出 manifest」自动写入血缘边，
+    不依赖人工填写，因此不会出现“三个月后全是过期链接”的问题。
+  </div>
+
+  <div class="jd-toolbar">
+    <select class="jd-select" id="fDs" style="width:300px"></select>
+    <button class="jd-btn" id="btnQuery">查看血缘</button>
+  </div>
+
+  <div class="jd-card jd-mb12">
+    <div class="jd-card__hd"><h3>版本链路</h3><span class="sub">按版本创建顺序</span></div>
+    <div class="jd-card__bd" id="chain"><div class="jd-empty">请选择数据集</div></div>
+  </div>
+
+  <div class="jd-card jd-card__bd--flush">
+    <div class="jd-card__hd"><h3>血缘边</h3><span class="sub">含跨数据集合并</span></div>
+    <div id="edges"><div class="jd-empty">请选择数据集</div></div>
+  </div>
+</div>
+{% endblock %}
+
+{% block init %}
+JD.get('/api/ds/options').then(function (list) {
+  $('#fDs').html('<option value="">请选择数据集</option>' + list.map(function (o) {
+    return '<option value="' + o.id + '">' + JD.esc(o.dataset_name) + '（' + JD.esc(o.dataset_code) + '）</option>';
+  }).join(''));
+  if (list.length) { $('#fDs').val(list[0].id); load(); }
+});
+
+$('#btnQuery').on('click', load);
+$('#fDs').on('change', load);
+
+function load() {
+  var id = $('#fDs').val();
+  if (!id) {
+    $('#chain').html('<div class="jd-empty">请选择数据集</div>');
+    $('#edges').html('<div class="jd-empty">请选择数据集</div>');
+    return;
+  }
+  JD.get('/api/ds/lineage', { datasetId: id }).then(function (d) {
+    var nodes = d.nodes || [], edges = d.edges || [];
+    if (!nodes.length) { $('#chain').html('<div class="jd-empty">暂无版本</div>'); return; }
+
+    var maxScore = 0;
+    nodes.forEach(function (n) { maxScore = Math.max(maxScore, Number(n.quality_score || 0)); });
+
+    var chainHtml = '<div style="display:flex;align-items:center;gap:0;overflow-x:auto;padding:6px 2px">';
+    nodes.forEach(function (n, i) {
+      var ok = n.quality_status === 'PASS';
+      chainHtml += '<div style="min-width:190px;border:1px solid var(--border-light);border-radius:10px;padding:12px 14px;' +
+        'background:var(--bg-panel);box-shadow:var(--shadow-sm)">' +
+        '<div style="font-weight:700;font-size:13.5px">' + JD.esc(n.version_no) + '</div>' +
+        '<div class="jd-hint" style="margin:3px 0 7px">' + JD.fmtTime(n.created_at || '') + '</div>' +
+        '<div>' + JD.qualityTag(n.quality_score, n.quality_status) + '</div>' +
+        '<div class="jd-progress" style="margin-top:8px"><i style="width:' +
+        Math.min(100, Number(n.quality_score || 0)) + '%;background:' + (ok ? 'var(--success)' : 'var(--danger)') + '"></i></div>' +
+        '</div>';
+      if (i < nodes.length - 1) {
+        var e = edges.filter(function (x) { return x.src_version_id === n.id; })[0];
+        chainHtml += '<div style="padding:0 12px;text-align:center;color:var(--text-mute);flex:none">' +
+          '<div style="font-size:20px;color:var(--primary)">→</div>' +
+          '<div style="font-size:11px">' + (e ? JD.esc(e.job_name || e.job_type) : '派生') + '</div></div>';
+      }
+    });
+    chainHtml += '</div>';
+    $('#chain').html(chainHtml);
+
+    if (!edges.length) { $('#edges').html('<div class="jd-empty">该数据集尚无血缘边</div>'); return; }
+    var rows = edges.map(function (e) {
+      return '<tr><td>' + JD.esc(e.src_ds || '-') + ' <span class="jd-code">' + JD.esc(e.src_ver || '-') + '</span></td>' +
+        '<td><span class="jd-tag jd-tag--primary">' + JD.esc(e.job_name || e.job_type) + '</span>' +
+        '<div class="jd-hint">' + JD.esc(e.job_type) + '</div></td>' +
+        '<td>' + JD.esc(e.dst_ds || '-') + ' <span class="jd-code">' + JD.esc(e.dst_ver || '-') + '</span></td>' +
+        '<td class="jd-hint">' + JD.fmtTime(e.created_at) + '</td></tr>';
+    }).join('');
+    $('#edges').html('<table class="jd-table"><thead><tr><th>来源版本</th><th>加工动作</th><th>产出版本</th><th>时间</th></tr></thead><tbody>' +
+      rows + '</tbody></table>');
+  });
+}
+{% endblock %}

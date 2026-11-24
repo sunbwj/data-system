@@ -1,0 +1,565 @@
+<!DOCTYPE html>
+<!-- 门户框架页（原 index.html）：上(top)/左(left)/折叠条/右(main iframe)/下(down) 四区布局。
+     对应路由 GET /；未登录会重定向到 /login（index.html 登录页）。 -->
+<html lang="zh-CN" data-theme="{{ user.pref_theme or 'blue' }}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ boot.nameZh }} {{ boot.version }}</title>
+  <link rel="icon" href="{{ boot.logo }}">
+  <link rel="stylesheet" href="/static/css/theme.css?v=1.0.5">
+  <link rel="stylesheet" href="/static/css/jd.css?v=1.0.5">
+  <script src="/static/vendor/jquery.min.js"></script>
+  <script src="/static/js/jd.js?v=1.0.5"></script>
+</head>
+<body>
+<div class="jd-shell">
+  <header class="jd-top">
+    <div class="jd-brand">
+      <img src="{{ boot.logo }}" alt="logo" id="brandLogo">
+      <div class="jd-brand__txt">
+        <span class="jd-brand__name" id="brandName">{{ boot.nameZh }}</span>
+        <span class="jd-brand__en" id="brandEn">{{ boot.nameEn }}</span>
+      </div>
+      <span class="jd-tag jd-tag--primary" style="margin-left:6px">{{ boot.version }}</span>
+    </div>
+    <div class="jd-top__spacer"></div>
+    <div class="jd-top__tools">
+      <button class="jd-iconbtn" id="btnTheme" title="切换主题"></button>
+      <button class="jd-iconbtn" id="btnBell" title="我的消息">
+        <span class="jd-badge" id="bellBadge" style="display:none">0</span>
+      </button>
+      <div class="jd-user" id="userBox">
+        <div class="jd-avatar" id="avatar">管</div>
+        <div class="jd-user__meta">
+          <div class="jd-user__name" id="userName">{{ user.real_name }}</div>
+          <div class="jd-user__role" id="userDept">{{ user.dept_name or '' }}</div>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <div class="jd-body">
+    <aside class="jd-left" id="sidebar">
+      <div class="jd-left__scroll" id="menuBox"></div>
+    </aside>
+    <div class="jd-splitter" id="btnCollapse" title="收起 / 展开菜单">
+      <span class="jd-splitter__handle"></span>
+    </div>
+    <main class="jd-main">
+      <!-- 标签条：每个打开过的页面一个页签，切换不销毁 iframe，页面状态（滚动/筛选/输入）得以保留 -->
+      <div class="jd-tabs" id="tabBar">
+        <div class="jd-tabs__scroll" id="tabScroll"></div>
+        <div class="jd-tabs__tools">
+          <button class="jd-tabs__tool" id="btnTabReload" title="刷新当前标签"></button>
+          <button class="jd-tabs__tool" id="btnTabMore" title="更多标签操作"></button>
+        </div>
+      </div>
+      <div class="jd-tabs__body" id="tabBody"></div>
+    </main>
+  </div>
+
+  <footer class="jd-down">
+    <span id="downVersion">{{ boot.version }}</span>
+    <span class="sep">|</span>
+    <span>内容寻址版本 · 质量门禁 · 全链路血缘</span>
+    <span class="sep">|</span>
+    <span id="downTime"></span>
+    <span class="grow"></span>
+    <span id="downContact">{{ boot.contact }}</span>
+    <span class="sep">|</span>
+    <span id="downUser">{{ user.real_name }}@{{ user.org_name or '九豆' }}</span>
+  </footer>
+</div>
+
+<script>
+var BOOT = {{ boot|tojson }}, USER = {{ user|tojson }};
+var MENUS = [];
+
+$(function () {
+  $('#brandLogo').attr('src', BOOT.logo);
+  $('#brandName').text(BOOT.nameZh);
+  $('#brandEn').text(BOOT.nameEn);
+  $('#avatar').text((USER.real_name || 'U').slice(0, 1));
+  $('#btnTheme').html(JD.icon('theme'));
+  $('#btnBell').prepend(JD.icon('bell'));
+  $('#btnCollapse .jd-splitter__handle').html(JD.icon('chevron-left'));
+  $('#btnTabReload').html(JD.icon('refresh'));
+  $('#btnTabMore').html(JD.icon('chevron-down'));
+
+  JD.init({ boot: BOOT, user: USER, perms: [] }).then(function () {
+    return JD.get('/api/auth/me');
+  }).then(function (me) {
+    JD.state.user = me.user; JD.state.boot = me.boot;
+    JD.state.perms = {};
+    (me.perms || []).forEach(function (p) { JD.state.perms[p] = true; });
+    MENUS = me.menus || [];
+    JD.state.menus = MENUS;
+    renderMenu(MENUS);
+    initTabs();
+    refreshBadge();
+    setInterval(refreshBadge, 30000);
+  });
+
+  /* ---------------- 菜单 ---------------- */
+  function firstMenuRoute(nodes) {
+    for (var i = 0; i < nodes.length; i++) {
+      var n = nodes[i];
+      if (n.menu_type === 'MENU' && n.route) return n.route;
+      var r = firstMenuRoute(n.children || []);
+      if (r) return r;
+    }
+    return '';
+  }
+
+  function renderMenu(nodes) {
+    var html = nodes.map(function (n) {
+      var hasKids = (n.children || []).length > 0;
+      var ic = JD.icon(n.icon || (n.menu_type === 'DIR' ? 'folder' : 'file'));
+      if (hasKids) {
+        return '<div class="jd-menu__group" data-group="' + n.id + '">' +
+          '<div class="jd-menu__item js-group" data-id="' + n.id + '">' + ic +
+          '<span class="jd-menu__label">' + JD.esc(n.menu_name) + '</span>' +
+          '<span class="jd-menu__caret">' + JD.icon('chevron-right') + '</span></div>' +
+          '<div class="jd-menu__sub" data-sub="' + n.id + '">' +
+          n.children.map(function (c) {
+            return '<div class="jd-menu__item js-page" data-route="' + JD.esc(c.route || '') +
+              '" data-title="' + JD.esc(c.menu_name) + '" data-icon="' + JD.esc(c.icon || 'file') +
+              '" data-id="' + c.id + '">' + JD.icon(c.icon || 'file') +
+              '<span class="jd-menu__label">' + JD.esc(c.menu_name) + '</span></div>';
+          }).join('') + '</div></div>';
+      }
+      return '<div class="jd-menu__item js-page" data-route="' + JD.esc(n.route || '') +
+        '" data-title="' + JD.esc(n.menu_name) + '" data-icon="' + JD.esc(n.icon || 'file') +
+        '" data-id="' + n.id + '">' + ic +
+        '<span class="jd-menu__label">' + JD.esc(n.menu_name) + '</span></div>';
+    }).join('');
+    $('#menuBox').html(html);
+
+    $('#menuBox').on('click', '.js-group', function () {
+      var id = $(this).data('id');
+      var $sub = $('[data-sub="' + id + '"]');
+      $sub.toggleClass('is-open');
+      $(this).toggleClass('is-open');
+      if ($('#sidebar').hasClass('is-collapsed')) {
+        $('#sidebar').removeClass('is-collapsed');
+        $sub.addClass('is-open');
+      }
+    });
+    $('#menuBox').on('click', '.js-page', function () {
+      var route = $(this).data('route');
+      if (!route) return;
+      openTab(route, $(this).data('title'), $(this).data('icon'));
+    });
+  }
+
+  /* ---------------- 右侧多标签页 ----------------
+     每个标签一个独立 iframe，切换只改 display、不重新 load：
+     页面里的筛选条件、滚动位置、已填表单全部保留。
+     #mainFrame 这个 id/name 会转移给当前激活的 iframe，兼容旧脚本与旧书签。 */
+  var TABS = [];          // [{route,title,icon,$tab,$pane,$frame,fixed}]
+  var ACTIVE = '';        // 当前激活 route
+  var FIXED = '';         // 常驻标签（首个菜单，通常是工作台），不可关闭
+  var MAX_TABS = 12;      // 同时保留的 iframe 上限，超出时淘汰最久未激活的非常驻标签
+  var HASH_LOCK = false;  // activateTab 写 hash 时置位，避免 hashchange 回环
+
+  function menuMeta(route) {
+    var hit = null;
+    (function walk(nodes) {
+      for (var i = 0; i < nodes.length; i++) {
+        var n = nodes[i];
+        if (n.route === route) { hit = n; return; }
+        if ((n.children || []).length) { walk(n.children); if (hit) return; }
+      }
+    })(MENUS);
+    return hit || {};
+  }
+
+  function findTab(route) {
+    for (var i = 0; i < TABS.length; i++) if (TABS[i].route === route) return TABS[i];
+    return null;
+  }
+
+  function createTab(route, title, icon) {
+    var meta = menuMeta(route);
+    var name = title || meta.menu_name || (route.split('/').pop() || '页面').replace('.html', '');
+    var ico = icon || meta.icon || 'file';
+    var fixed = route === FIXED;
+
+    var $tab = $('<div class="jd-tab' + (fixed ? ' jd-tab--fixed' : '') +
+      '" data-route="' + JD.esc(route) + '" title="' + JD.esc(name) + '">' +
+      '<span class="jd-tab__ico">' + JD.icon(ico) + '</span>' +
+      '<span class="jd-tab__txt">' + JD.esc(name) + '</span>' +
+      (fixed ? '' : '<span class="jd-tab__close" title="关闭此标签">' + JD.icon('close') + '</span>') +
+      '</div>').appendTo('#tabScroll');
+
+    var $pane = $('<div class="jd-tabpane" data-route="' + JD.esc(route) + '">' +
+      '<div class="jd-tabpane__mask"><span class="jd-spinner"></span></div></div>')
+      .appendTo('#tabBody');
+
+    var $frame = $('<iframe title="' + JD.esc(name) + '"></iframe>')
+      .attr('src', route + (route.indexOf('?') > -1 ? '&' : '?') + 'embed=1')
+      .appendTo($pane);
+    $frame.on('load', function () { $pane.find('.jd-tabpane__mask').remove(); });
+
+    var t = { route: route, title: name, icon: ico, $tab: $tab, $pane: $pane,
+              $frame: $frame, fixed: fixed, touched: Date.now() };
+    TABS.push(t);
+    return t;
+  }
+
+  function removeTab(t) {
+    t.$tab.remove();
+    t.$pane.remove();
+    var i = TABS.indexOf(t);
+    if (i > -1) TABS.splice(i, 1);
+  }
+
+  function openTab(route, title, icon) {
+    if (!route) return;
+    var t = findTab(route);
+    if (!t) {
+      // 超限不弹窗拦人（会打断正在操作的流程），改为淘汰最久未激活的非常驻标签
+      if (TABS.length >= MAX_TABS) evictOldest();
+      t = createTab(route, title, icon);
+    }
+    activateTab(route);
+  }
+
+  function evictOldest() {
+    var victim = null;
+    for (var i = 0; i < TABS.length; i++) {
+      var t = TABS[i];
+      if (t.fixed || t.route === ACTIVE) continue;
+      if (!victim || (t.touched || 0) < (victim.touched || 0)) victim = t;
+    }
+    if (victim) removeTab(victim);
+  }
+
+  function activateTab(route) {
+    var t = findTab(route);
+    if (!t) return;
+    ACTIVE = route;
+    t.touched = Date.now();
+    $('#tabScroll .jd-tab').removeClass('is-active');
+    t.$tab.addClass('is-active');
+    $('#tabBody .jd-tabpane').removeClass('is-active');
+    t.$pane.addClass('is-active');
+    // 让 #mainFrame 始终指向激活的 iframe（兼容既有外部脚本/书签）
+    $('#tabBody iframe').removeAttr('id').attr('name', '');
+    t.$frame.attr({ id: 'mainFrame', name: 'mainFrame' });
+    highlightMenu(route);
+    scrollTabIntoView(t.$tab);
+    syncHash(route);
+    persistTabs();
+  }
+
+  function highlightMenu(route) {
+    $('#menuBox .js-page').removeClass('is-active').each(function () {
+      if ($(this).data('route') === route) {
+        $(this).addClass('is-active');
+        var $sub = $(this).closest('.jd-menu__sub');
+        if ($sub.length) { $sub.addClass('is-open'); $sub.prev('.js-group').addClass('is-open'); }
+      }
+    });
+  }
+
+  function scrollTabIntoView($tab) {
+    var el = $tab && $tab[0], box = $('#tabScroll')[0];
+    if (!el || !box) return;
+    var l = el.offsetLeft, r = l + el.offsetWidth;
+    if (l < box.scrollLeft) box.scrollLeft = Math.max(0, l - 6);
+    else if (r > box.scrollLeft + box.clientWidth) box.scrollLeft = r - box.clientWidth + 6;
+  }
+
+  function syncHash(route) {
+    var want = '#' + route;
+    var now = '';
+    try { now = decodeURIComponent(location.hash); } catch (e) { now = location.hash; }
+    if (now === want) return;
+    HASH_LOCK = true;
+    location.hash = route;
+    setTimeout(function () { HASH_LOCK = false; }, 0);
+  }
+
+  function closeTab(route) {
+    var t = findTab(route);
+    if (!t || t.fixed) return;
+    var i = TABS.indexOf(t);
+    var wasActive = (ACTIVE === route);
+    removeTab(t);
+    if (wasActive) {
+      var next = TABS[i] || TABS[i - 1];
+      if (next) activateTab(next.route);
+      else if (FIXED && findTab(FIXED)) activateTab(FIXED);
+      else if (FIXED) openTab(FIXED);
+    } else {
+      persistTabs();
+    }
+  }
+
+  function closeOthers(route) {
+    TABS.slice().forEach(function (t) {
+      if (t.route !== route && !t.fixed) removeTab(t);
+    });
+    if (route && findTab(route)) activateTab(route);
+    else if (FIXED) openTab(FIXED);
+  }
+
+  function closeAll() {
+    TABS.slice().forEach(function (t) { if (!t.fixed) removeTab(t); });
+    if (FIXED) {
+      if (findTab(FIXED)) activateTab(FIXED);
+      else openTab(FIXED);
+    } else if (TABS[0]) {
+      activateTab(TABS[0].route);
+    }
+  }
+
+  function reloadTab(route) {
+    var t = findTab(route || ACTIVE);
+    if (!t) return;
+    var src = t.$frame.attr('src') || '';
+    $('<div class="jd-tabpane__mask"><span class="jd-spinner"></span></div>').appendTo(t.$pane);
+    // 加时间戳强制走网络，避免浏览器缓存导致「刷新无变化」
+    t.$frame.attr('src', src + (src.indexOf('?') > -1 ? '&' : '?') + '_r=' + Date.now());
+  }
+
+  function persistTabs() {
+    try {
+      sessionStorage.setItem('jd.tabs', JSON.stringify({
+        active: ACTIVE,
+        list: TABS.map(function (t) {
+          return { route: t.route, title: t.title, icon: t.icon };
+        })
+      }));
+    } catch (e) { /* 隐私模式下 sessionStorage 不可用，忽略 */ }
+  }
+
+  function readTabs() {
+    try { return JSON.parse(sessionStorage.getItem('jd.tabs') || 'null'); }
+    catch (e) { return null; }
+  }
+
+  function initTabs() {
+    FIXED = firstMenuRoute(MENUS) || '';
+    var store = readTabs();
+    var hashRoute = '';
+    if (location.hash) {
+      try { hashRoute = decodeURIComponent(location.hash.slice(1)); }
+      catch (e) { hashRoute = location.hash.slice(1); }
+    }
+    // 1) 先按上次会话恢复标签（不激活），2) 再决定激活谁
+    if (store && store.list && store.list.length) {
+      store.list.slice(0, MAX_TABS).forEach(function (it) {
+        if (it && it.route && !findTab(it.route)) createTab(it.route, it.title, it.icon);
+      });
+    }
+    if (hashRoute) { openTab(hashRoute); return; }
+    if (store && store.active && findTab(store.active)) { activateTab(store.active); return; }
+    if (FIXED) { openTab(FIXED); return; }
+    if (TABS.length) { activateTab(TABS[0].route); return; }
+    JD.alert('暂无可访问菜单',
+      '当前账号还没有被分配可访问的菜单，请联系管理员配置角色权限。', 'warning');
+  }
+
+  /* 标签多了以后，滚轮直接横向滚标签条（不拦截页面其它区域的纵向滚动） */
+  $('#tabBar').on('wheel', '#tabScroll', function (e) {
+    var ev = e.originalEvent || {};
+    if (!ev.deltaY && !ev.deltaX) return;
+    if (this.scrollWidth <= this.clientWidth) return;   // 未溢出就交给默认行为
+    var d = Math.abs(ev.deltaX) > Math.abs(ev.deltaY) ? ev.deltaX : ev.deltaY;
+    this.scrollLeft += d;
+    e.preventDefault();
+  });
+
+  /* 页签点击 / 关闭 / 中键关闭 */
+  $('#tabBar').on('click', '.jd-tab', function (e) {
+    if ($(e.target).closest('.jd-tab__close').length) return;
+    openTab($(this).data('route'));
+  });
+  $('#tabBar').on('click', '.jd-tab__close', function (e) {
+    e.stopPropagation();
+    closeTab($(this).closest('.jd-tab').data('route'));
+  });
+  $('#tabBar').on('auxclick', '.jd-tab', function (e) {
+    if (e.which === 2) {
+      e.preventDefault();
+      closeTab($(this).data('route'));
+    }
+  });
+
+  /* 右键菜单：刷新 / 关闭 / 关闭其他 / 关闭全部 */
+  var $tabMenu = null;
+  function closeTabMenu() { if ($tabMenu) { $tabMenu.remove(); $tabMenu = null; } }
+  $(document).on('click', closeTabMenu);
+  $('#tabBar').on('contextmenu', '.jd-tab', function (e) {
+    e.preventDefault();
+    var route = $(this).data('route');
+    var t = findTab(route);
+    closeTabMenu();
+    var html = '<div class="jd-tabmenu__item" data-act="reload">' + JD.icon('refresh') + '刷新此页</div>' +
+      (t && t.fixed ? '' :
+        '<div class="jd-tabmenu__item" data-act="close">' + JD.icon('close') + '关闭此页</div>') +
+      '<div class="jd-tabmenu__sep"></div>' +
+      '<div class="jd-tabmenu__item" data-act="others">' + JD.icon('check-square') + '关闭其他</div>' +
+      '<div class="jd-tabmenu__item is-danger" data-act="all">' + JD.icon('trash') + '关闭全部</div>';
+    $tabMenu = $('<div class="jd-tabmenu"></div>').html(html).appendTo('body');
+    var x = Math.min(e.clientX, window.innerWidth - $tabMenu.outerWidth() - 8);
+    var y = Math.min(e.clientY, window.innerHeight - $tabMenu.outerHeight() - 8);
+    $tabMenu.css({ left: x, top: y }).on('click', '.jd-tabmenu__item', function (ev) {
+      ev.stopPropagation();
+      var act = $(this).data('act');
+      closeTabMenu();
+      if (act === 'reload') reloadTab(route);
+      else if (act === 'close') closeTab(route);
+      else if (act === 'others') closeOthers(route);
+      else if (act === 'all') closeAll();
+    });
+  });
+
+  /* 标签条右侧工具 */
+  $('#btnTabReload').on('click', function (e) { e.stopPropagation(); reloadTab(ACTIVE); });
+  $('#btnTabMore').on('click', function (e) {
+    e.stopPropagation();
+    var html = '<div class="jd-tabmenu__item" data-act="others">' + JD.icon('check-square') + '关闭其他</div>' +
+      '<div class="jd-tabmenu__item" data-act="all">' + JD.icon('trash') + '关闭全部</div>' +
+      '<div class="jd-tabmenu__sep"></div>' +
+      '<div class="jd-tabmenu__item" data-act="reloadAll">' + JD.icon('refresh') + '全部刷新</div>';
+    var $p = popover($(this), html);
+    if (!$p) return;
+    $p.on('click', '.jd-tabmenu__item', function (ev) {
+      ev.stopPropagation();
+      var act = $(this).data('act');
+      if ($p) { $p.remove(); $pop = null; }
+      if (act === 'others') closeOthers(ACTIVE);
+      else if (act === 'all') closeAll();
+      else if (act === 'reloadAll') {
+        TABS.slice().forEach(function (t) { reloadTab(t.route); });
+      }
+    });
+  });
+
+  $(window).on('hashchange', function () {
+    if (HASH_LOCK) return;
+    var r = '';
+    try { r = decodeURIComponent(location.hash.slice(1)); }
+    catch (e) { r = location.hash.slice(1); }
+    if (r) openTab(r);
+  });
+
+  /* ---------------- 收起 / 展开（左右分栏中间的控制条） ---------------- */
+  $('#btnCollapse').on('click', function () {
+    var col = $('#sidebar').toggleClass('is-collapsed').hasClass('is-collapsed');
+    $(this).find('.jd-splitter__handle').html(JD.icon(col ? 'chevron-right' : 'chevron-left'))
+      .attr('title', col ? '展开菜单' : '收起菜单');
+    $(this).attr('title', col ? '展开菜单' : '收起菜单');
+  });
+
+  /* ---------------- 气泡面板 ---------------- */
+  var $pop = null;
+  function popover($anchor, html) {
+    if ($pop) { $pop.remove(); $pop = null; return; }
+    $pop = $('<div class="jd-card" style="position:fixed;z-index:1500;min-width:190px;box-shadow:var(--shadow-lg);overflow:hidden"></div>')
+      .html(html).appendTo('body');
+    var o = $anchor.offset(), w = $pop.outerWidth();
+    $pop.css({ top: o.top + 38, left: Math.max(8, o.left + $anchor.outerWidth() - w) });
+    setTimeout(function () {
+      $(document).one('click', function () { if ($pop) { $pop.remove(); $pop = null; } });
+    }, 0);
+    return $pop;
+  }
+
+  /* 主题 */
+  $('#btnTheme').on('click', function (e) {
+    e.stopPropagation();
+    var html = '<div style="padding:8px 10px 6px;font-size:11.5px;color:var(--text-mute)">界面主题（背景 / 按钮 / 文字统一适配）</div>';
+    JD.THEMES.forEach(function (t) {
+      html += '<div class="js-theme" data-key="' + t.key + '" style="display:flex;align-items:center;gap:9px;padding:8px 12px;cursor:pointer">' +
+        '<span style="width:14px;height:14px;border-radius:4px;background:' + t.color + '"></span>' +
+        '<span style="flex:1">' + t.name + '</span>' +
+        (JD.state.theme === t.key ? '<span style="color:var(--primary)">' + JD.icon('check') + '</span>' : '') +
+        '</div>';
+    });
+    var $p = popover($(this), html);
+    if ($p) {
+      $p.on('click', '.js-theme', function (ev) {
+        ev.stopPropagation();
+        var key = $(this).data('key');
+        JD.applyTheme(key, true);
+        $('#btnTheme').trigger('click');
+        // 主题广播给所有已打开的标签，切回来时不会出现「新旧主题混杂」
+        $('#tabBody iframe').each(function () {
+          try { this.contentWindow.postMessage({ type: 'jd-theme', theme: key }, '*'); }
+          catch (err) { }
+        });
+      });
+    }
+  });
+
+  /* 用户 */
+  $('#userBox').on('click', function (e) {
+    e.stopPropagation();
+    var html = '<div style="padding:10px 12px;border-bottom:1px solid var(--border-light)">' +
+      '<div style="font-weight:600">' + JD.esc(USER.real_name) + '</div>' +
+      '<div style="font-size:11.5px;color:var(--text-mute)">' + JD.esc(USER.email || '') + '</div></div>' +
+      '<div class="js-pwd" style="padding:9px 12px;cursor:pointer">' + JD.icon('lock') + ' 修改密码</div>' +
+      '<div class="js-logout" style="padding:9px 12px;cursor:pointer;color:var(--danger)">' + JD.icon('logout') + ' 退出登录</div>';
+    var $p = popover($(this), html);
+    if (!$p) return;
+    $p.on('click', '.js-pwd', function (ev) {
+      ev.stopPropagation();
+      $pop.remove(); $pop = null;
+      JD.formDialog({
+        title: '修改密码', width: 'jd-dialog--sm',
+        fields: [
+          { name: 'oldPassword', label: '原密码', type: 'password', required: true },
+          { name: 'newPassword', label: '新密码', type: 'password', required: true,
+            hint: '不少于 8 位，且不能使用初始密码 888888' },
+          { name: 'confirm', label: '确认新密码', type: 'password', required: true }
+        ],
+        onSubmit: function (v) {
+          if (v.newPassword !== v.confirm) { JD.alert('提示', '两次输入的新密码不一致', 'warning'); return false; }
+          return JD.post('/api/auth/change-pwd', v).then(function () {
+            JD.alert('修改成功', '密码已更新，请使用新密码重新登录', 'success').then(function () {
+              location.href = '/login';
+            });
+            return true;
+          });
+        }
+      });
+    });
+    $p.on('click', '.js-logout', function (ev) {
+      ev.stopPropagation();
+      JD.confirm('退出登录', '确定要退出当前账号吗？', { okText: '退出', danger: true }).then(function (yes) {
+        if (!yes) return;
+        // 换账号后不应恢复上一个账号的标签页，先清掉会话级标签缓存
+        try { sessionStorage.removeItem('jd.tabs'); } catch (err) { }
+        // 不论接口成败都回登录页：会话清不掉也不该把用户困在框架页里
+        var back = function () { location.href = '/login'; };
+        JD.post('/api/auth/logout', {}, { silent: true }).then(back, back);
+      });
+    });
+  });
+
+  /* 消息角标 */
+  function refreshBadge() {
+    JD.get('/api/msg/unread-count', null, { silent: true }).then(function (d) {
+      var n = (d && d.total) || 0;
+      $('#bellBadge').text(n > 99 ? '99+' : n).toggle(n > 0);
+    }).catch(function () { });
+  }
+  $('#btnBell').on('click', function () { openTab('/pages/inbox.html', '我的消息'); });
+
+  /* 底部时间 */
+  function tick() {
+    var d = new Date();
+    var p = function (n) { return n < 10 ? '0' + n : n; };
+    $('#downTime').text(d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) +
+      ' ' + p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds()));
+  }
+  tick(); setInterval(tick, 1000);
+});
+</script>
+</body>
+</html>

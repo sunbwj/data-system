@@ -1,0 +1,131 @@
+{% extends "layout.html" %}
+{% block title %}我的消息 · 九豆高质量数据资产平台{% endblock %}
+{% block body %}
+<div class="jd-page">
+  <div class="jd-crumb">消息中心 <span>/</span> <b>我的消息</b></div>
+
+  <div class="jd-tabs" id="tabs">
+    <div class="jd-tab is-active" data-status="">全部</div>
+    <div class="jd-tab" data-status="SENT">未读</div>
+    <div class="jd-tab" data-status="READ">已读</div>
+  </div>
+
+  <div class="jd-toolbar">
+    <select class="jd-select" id="fCh" style="width:150px">
+      <option value="">全部渠道</option>
+      <option value="INAPP">站内信</option>
+      <option value="EMAIL">邮件</option>
+    </select>
+    <button class="jd-btn jd-btn--primary" id="btnSearch">查询</button>
+    <button class="jd-btn" id="btnReset">重置</button>
+  </div>
+
+  <div class="jd-card jd-card__bd--flush" id="tbl"></div>
+</div>
+{% endblock %}
+
+{% block init %}
+var tbl, curStatus = '', cache = {};
+
+tbl = JD.table({
+  el: '#tbl', url: '/api/msg/inbox', pageSize: 15,
+  onLoaded: function (d) {
+    cache = {};
+    (d.rows || []).forEach(function (r) { cache[r.id] = r; r.__label = r.title; });
+  },
+  columns: [
+    { field: 'title', title: '消息', render: function (v, r) {
+      var unread = r.status !== 'READ';
+      return '<a href="javascript:;" class="js-view" data-id="' + r.id + '"' +
+        (unread ? ' style="font-weight:600"' : '') + '>' +
+        (unread ? '<span class="jd-dot" style="background:var(--primary)"></span>' : '') +
+        JD.esc(v) + '</a>' +
+        '<div class="jd-hint" style="margin-top:3px;max-width:640px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' +
+        JD.esc((r.content || '').replace(/\n/g, ' ').slice(0, 90)) + '</div>';
+    }},
+    { field: 'channel', title: '渠道', width: 90, render: function (v) {
+      var m = { INAPP: ['站内信', 'info'], EMAIL: ['邮件', 'primary'], IM: ['即时', 'success'] };
+      return '<span class="jd-tag jd-tag--' + (m[v] ? m[v][1] : 'info') + '">' + (m[v] ? m[v][0] : v) + '</span>';
+    }},
+    { field: 'status', title: '状态', width: 90, render: function (v) {
+      return v === 'READ' ? '<span class="jd-tag jd-tag--info">已读</span>'
+        : (v === 'FAILED' ? '<span class="jd-tag jd-tag--danger">投递失败</span>'
+          : '<span class="jd-tag jd-tag--warning">未读</span>');
+    }},
+    { field: 'created_at', title: '时间', width: 140, render: function (v) { return '<span class="jd-hint">' + JD.fmtTime(v) + '</span>'; }},
+  ],
+  ops: [
+    { icon: 'eye', text: '查看', needRow: true, onClick: function (r) { openMsg(r); } },
+    { icon: 'mail', text: '标记已读', needRow: true, onClick: function (r) { markRead(r); } },
+    { icon: 'trash', text: '删除', type: 'danger', needRow: true, onClick: function (r) { removeMsg(r); } },
+    { sep: true },
+    { icon: 'check-square', text: '全部已读', onClick: function () { readAll(); } },
+    { icon: 'refresh', text: '刷新', onClick: function () { tbl.clearSelected(); tbl.reload(); } }
+  ],
+  hint: '消息包含站内信与邮件两条通道；选中一行后可查看 / 标记已读 / 删除'
+});
+
+$('#tbl').on('click', '.js-view', function () {
+  var m = cache[$(this).data('id')];
+  if (m) openMsg(m);
+});
+
+$('#tabs').on('click', '.jd-tab', function () {
+  $('#tabs .jd-tab').removeClass('is-active');
+  $(this).addClass('is-active');
+  curStatus = $(this).data('status');
+  tbl.setParams({ status: curStatus, channel: $('#fCh').val() });
+});
+$('#btnSearch').on('click', function () { tbl.setParams({ status: curStatus, channel: $('#fCh').val() }); });
+$('#btnReset').on('click', function () {
+  $('#fCh').val(''); curStatus = '';
+  $('#tabs .jd-tab').removeClass('is-active').first().addClass('is-active');
+  tbl.setParams({ status: '', channel: '' });
+});
+
+function openMsg(m) {
+  var id = m.id;
+  JD.dialog({
+    title: m.title || '消息详情', width: 'jd-dialog--lg',
+    body: '<div class="jd-flex jd-mb12"><span class="jd-tag jd-tag--info">' +
+      (m.channel === 'EMAIL' ? '邮件' : '站内信') + '</span>' +
+      '<span class="jd-hint">' + JD.fmtTime(m.created_at) + '</span></div>' +
+      '<div style="white-space:pre-wrap;line-height:1.85">' + JD.esc(m.content || '') + '</div>',
+    footer: '<button class="jd-btn" data-act="close">关闭</button>',
+    onOpen: function ($m, close) { $m.on('click', '[data-act="close"]', close); }
+  });
+  if (m.status !== 'READ') {
+    JD.post('/api/msg/read', { id: id }, { silent: true }).then(function () {
+      tbl.reload();
+    });
+  }
+}
+
+function markRead(m) {
+  if (m.status === 'READ') { JD.alert('提示', '该消息已是已读状态', 'info'); return; }
+  JD.post('/api/msg/read', { id: m.id }).then(function () {
+    JD.alert('已处理', '消息已标记为已读', 'success');
+    tbl.clearSelected(); tbl.reload();
+  });
+}
+
+function removeMsg(m) {
+  JD.confirm('删除消息', '删除后不可恢复，确定删除「' + (m.title || '该消息') + '」？',
+    { danger: true, okText: '删除' }).then(function (yes) {
+    if (!yes) return;
+    JD.post('/api/msg/delete', { id: m.id }).then(function () {
+      tbl.clearSelected(); tbl.reload();
+    });
+  });
+}
+
+function readAll() {
+  JD.confirm('全部标记已读', '将当前账号所有未读消息标记为已读。', { okText: '确定' }).then(function (yes) {
+    if (!yes) return;
+    JD.post('/api/msg/read', {}).then(function () {
+      JD.alert('已处理', '所有消息已标记为已读', 'success');
+      tbl.reload();
+    });
+  });
+}
+{% endblock %}

@@ -1,0 +1,186 @@
+{% extends "layout.html" %}
+{% block title %}加工流水线 · 九豆高质量数据资产平台{% endblock %}
+{% block body %}
+<div class="jd-page">
+  <div class="jd-crumb">数据资产 <span>/</span> <b>加工流水线</b></div>
+
+  <div class="jd-notice jd-mb12">
+    <b>流水线直接产出新版本</b>：读取数据集最近版本 → 按步骤加工 → 重新执行质量门禁 →
+    生成新的不可变版本（内容寻址），并<b>自动写入血缘边</b>（源版本 → 新版本），无需人工登记。
+  </div>
+
+  <div class="jd-toolbar">
+    <select class="jd-select" id="fDs" style="width:240px"></select>
+    <div class="jd-search">
+      <svg><use href="/static/img/icons.svg#i-search"></use></svg>
+      <input class="jd-input" id="kw" placeholder="流水线名称 / 编码">
+    </div>
+    <button class="jd-btn jd-btn--primary" id="btnSearch">查询</button>
+    <button class="jd-btn" id="btnReset">重置</button>
+  </div>
+
+  <div class="jd-card jd-card__bd--flush" id="tbl"></div>
+</div>
+{% endblock %}
+
+{% block init %}
+var tbl, dsMap = {};
+var STEPS = {
+  CLEAN: ['清洗', 'info'], DEDUP: ['去重', 'primary'], FILTER: ['过滤', 'warning'],
+  SAMPLE: ['抽样', 'success'], AUGMENT: ['增强', 'primary']
+};
+
+JD.get('/api/ds/options').then(function (list) {
+  (list || []).forEach(function (o) { dsMap[o.id] = o.dataset_name; });
+  $('#fDs').html('<option value="">全部数据集</option>' + (list || []).map(function (o) {
+    return '<option value="' + o.id + '">' + JD.esc(o.dataset_name) + '</option>';
+  }).join(''));
+});
+
+tbl = JD.table({
+  el: '#tbl', url: '/api/asset/pipeline/list', pageSize: 15,
+  columns: [
+    { field: 'pipeline_name', title: '流水线', render: function (v, r) {
+      return '<b>' + JD.esc(v) + '</b><div class="jd-hint">' + JD.esc(r.pipeline_code) + '</div>';
+    }},
+    { field: 'dataset_name', title: '目标数据集', width: 190, render: function (v) {
+      return JD.esc(v || '-');
+    }},
+    { field: 'step_type', title: '步骤', width: 100, render: function (v) {
+      var s = STEPS[v] || [v, 'info'];
+      return '<span class="jd-tag jd-tag--' + s[1] + '">' + s[0] + '</span>';
+    }},
+    { field: 'config_json', title: '步骤参数', render: function (v) {
+      return '<span class="jd-code">' + JD.esc(String(v || '{}').slice(0, 60)) + '</span>';
+    }},
+    { field: 'run_count', title: '运行次数', width: 96, className: 'num', render: function (v, r) {
+      return v > 0 ? v + ' <span class="jd-hint">（成功 ' + r.ok_count + '）</span>' : '未运行';
+    }},
+    { field: 'status', title: '状态', width: 80, render: function (v) {
+      return v === 1 ? '<span class="jd-tag jd-tag--success">启用</span>' : '<span class="jd-tag">停用</span>';
+    }},
+    { field: 'updated_at', title: '更新时间', width: 140, render: function (v) {
+      return '<span class="jd-hint">' + JD.fmtTime(v) + '</span>';
+    }}
+  ],
+  ops: [
+    { icon: 'plus', text: '新建流水线', type: 'primary', perm: 'pipeline:create',
+      onClick: function () { openForm(null); } },
+    { icon: 'edit', text: '编辑', needRow: true, perm: 'pipeline:create',
+      onClick: function (r) { openForm(r); } },
+    { icon: 'play', text: '运行', needRow: true, perm: 'pipeline:run',
+      onClick: function (r) { runPipeline(r); } },
+    { icon: 'history', text: '运行记录', needRow: true, perm: 'pipeline:list',
+      onClick: function (r) { openRuns(r); } },
+    { icon: 'trash', text: '删除', type: 'danger', needRow: true, perm: 'pipeline:delete',
+      onClick: function (r) { removePipeline(r); } },
+    { icon: 'refresh', text: '刷新', onClick: function () { tbl.clearSelected(); tbl.reload(); } }
+  ],
+  hint: '选中流水线后可编辑 / 运行 / 查看运行记录；运行会自动产生新版本与血缘'
+});
+
+function query() {
+  tbl.setParams({ datasetId: $('#fDs').val(), keyword: $.trim($('#kw').val()) });
+}
+$('#btnSearch').on('click', query);
+$('#btnReset').on('click', function () {
+  $('#fDs').val(''); $('#kw').val(''); query();
+});
+$('#kw').on('keydown', function (e) { if (e.key === 'Enter') query(); });
+
+function cfgHint(step) {
+  return {
+    CLEAN: '{} 或 {"dropEmpty":true}',
+    DEDUP: '{} 按整行去重',
+    FILTER: '{"field":"review","op":"notEmpty","value":""}，op 可为 notEmpty/eq/neq/contains',
+    SAMPLE: '{"ratio":0.2} 抽取 20%',
+    AUGMENT: '{"field":"source","value":"pipeline"} 追加派生字段'
+  }[step] || '{}';
+}
+
+function openForm(r) {
+  JD.formDialog({
+    title: r ? '编辑流水线' : '新建流水线', width: 'jd-dialog--lg',
+    fields: [
+      { name: 'pipeline_code', label: '流水线编码', required: true, readonly: !!r,
+        placeholder: '如 P_CLEAN_001' },
+      { name: 'pipeline_name', label: '流水线名称', required: true },
+      { name: 'dataset_id', label: '目标数据集', type: 'select', required: true, span: 2,
+        options: Object.keys(dsMap).map(function (k) { return { value: k, label: dsMap[k] }; }) },
+      { name: 'step_type', label: '加工步骤', type: 'select', required: true,
+        options: [{ value: 'CLEAN', label: '清洗（去空格 / 去空行）' },
+          { value: 'DEDUP', label: '去重（整行重复剔除）' },
+          { value: 'FILTER', label: '过滤（按字段条件）' },
+          { value: 'SAMPLE', label: '抽样（按比例）' },
+          { value: 'AUGMENT', label: '增强（追加派生字段）' }] },
+      { name: 'config_json', label: '步骤参数(JSON)', span: 2, value: '{}',
+        hint: 'FILTER: {"field":"review","op":"notEmpty"}；SAMPLE: {"ratio":0.2}；AUGMENT: {"field":"src","value":"x"}' },
+      { name: 'remark', label: '说明', type: 'textarea', span: 2, rows: 2 },
+      { name: 'status', label: '启用', type: 'switch', span: 2, value: 1 }
+    ],
+    data: r || { status: 1, config_json: '{}' },
+    onSubmit: function (v) {
+      if (r) v.id = r.id;
+      return JD.post('/api/asset/pipeline/save', v).then(function () {
+        JD.alert('已保存', '流水线已保存，可点击「运行」产出新版本', 'success');
+        tbl.reload();
+        return true;
+      });
+    }
+  });
+}
+
+function runPipeline(r) {
+  JD.confirm('运行流水线', '将对「' + r.dataset_name + '」最近版本执行【' +
+    (STEPS[r.step_type] || [r.step_type])[0] + '】，生成新的不可变版本并自动记录血缘。',
+    { okText: '开始运行' }).then(function (yes) {
+    if (!yes) return;
+    JD.loading(true, '流水线运行中…');
+    JD.post('/api/asset/pipeline/run', { id: r.id }).then(function (d) {
+      JD.loading(false);
+      JD.alert('运行完成',
+        (d.note || '') + '\n输入 ' + JD.fmtNum(d.rowsIn) + ' 行 → 输出 ' + JD.fmtNum(d.rowsOut) +
+        ' 行\n新版本 ' + d.versionNo + ' · 质量 ' + (d.status === 'PASS' ? '通过' : '未通过') +
+        '（' + Number(d.score).toFixed(2) + '）',
+        d.status === 'PASS' ? 'success' : 'warning').then(function () {
+        tbl.clearSelected(); tbl.reload();
+      });
+    }).catch(function () { JD.loading(false); });
+  });
+}
+
+function openRuns(r) {
+  JD.get('/api/asset/pipeline/runs', { pipelineId: r.id, page: 1, size: 20 }).then(function (d) {
+    var rows = (d.rows || []).map(function (x) {
+      var t = x.status === 'SUCCESS' ? 'success' : (x.status === 'FAILED' ? 'danger' : 'warning');
+      return '<tr><td>' + (x.status === 'SUCCESS' ? '<span class="jd-tag jd-tag--success">成功</span>'
+        : (x.status === 'FAILED' ? '<span class="jd-tag jd-tag--danger">失败</span>'
+          : '<span class="jd-tag jd-tag--warning">运行中</span>')) + '</td>' +
+        '<td>' + JD.esc(x.src_ver || '-') + ' → ' + JD.esc(x.dst_ver || '-') + '</td>' +
+        '<td class="num">' + JD.fmtNum(x.rows_in) + ' → ' + JD.fmtNum(x.rows_out) + '</td>' +
+        '<td class="jd-hint">' + JD.esc(x.log_text || '-') + '</td>' +
+        '<td class="jd-hint">' + JD.esc(x.operator || '-') + '<br>' + JD.fmtTime(x.started_at) + '</td></tr>';
+    }).join('');
+    JD.dialog({
+      title: '运行记录 · ' + r.pipeline_name, width: 'jd-dialog--xl',
+      body: '<div class="jd-table-wrap"><table class="jd-table"><thead><tr><th>状态</th><th>版本</th>' +
+        '<th class="num">行数</th><th>执行说明</th><th>操作人 / 时间</th></tr></thead><tbody>' +
+        (rows || '<tr><td colspan="5"><div class="jd-empty">还没有运行记录</div></td></tr>') +
+        '</tbody></table></div>',
+      footer: '<button class="jd-btn" data-act="close">关闭</button>',
+      onOpen: function ($m, close) { $m.on('click', '[data-act="close"]', close); }
+    });
+  });
+}
+
+function removePipeline(r) {
+  JD.confirm('删除流水线', '删除「' + r.pipeline_name + '」不会删除已产出的版本，确定删除？',
+    { danger: true, okText: '删除' }).then(function (yes) {
+    if (!yes) return;
+    JD.post('/api/asset/pipeline/delete', { id: r.id }).then(function () {
+      JD.alert('已删除', '流水线已删除', 'success');
+      tbl.clearSelected(); tbl.reload();
+    });
+  });
+}
+{% endblock %}

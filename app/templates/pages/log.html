@@ -1,0 +1,66 @@
+{% extends "layout.html" %}
+{% block title %}安全日志 · 九豆高质量数据资产平台{% endblock %}
+{% block body %}
+<div class="jd-page">
+  <div class="jd-crumb">系统管理 <span>/</span> <b>安全日志</b></div>
+
+  <div class="jd-notice jd-mb12">
+    审计日志 <b>append-only</b>：登录、操作、权限变更、数据下载/导出全部留痕，用于事后追责与合规检查。
+  </div>
+
+  <div class="jd-toolbar">
+    <select class="jd-select" id="fType" style="width:150px">
+      <option value="">全部类型</option>
+      <option value="LOGIN">登录日志</option>
+      <option value="OPER">操作日志</option>
+      <option value="PERM">权限变更</option>
+      <option value="DATA_ACCESS">数据访问</option>
+      <option value="SYSTEM">系统事件</option>
+    </select>
+    <div class="jd-search">
+      <svg><use href="/static/img/icons.svg#i-search"></use></svg>
+      <input class="jd-input" id="kw" placeholder="操作人 / 动作 / 对象">
+    </div>
+    <input class="jd-input" id="start" type="date" style="width:150px">
+    <span class="jd-hint">至</span>
+    <input class="jd-input" id="end" type="date" style="width:150px">
+    <button class="jd-btn" id="btnSearch">查询</button>
+  </div>
+
+  <div class="jd-card jd-card__bd--flush" id="tbl"></div>
+</div>
+{% endblock %}
+
+{% block init %}
+var TYPE = { LOGIN: ['登录', 'primary'], OPER: ['操作', 'info'], PERM: ['权限', 'warning'],
+  DATA_ACCESS: ['数据访问', 'danger'], SYSTEM: ['系统', 'info'] };
+
+var tbl = JD.table({
+  el: '#tbl', url: '/api/system/log/list', pageSize: 20,
+  columns: [
+    { field: 'created_at', title: '时间', width: 140, render: function (v) { return '<span class="jd-hint">' + JD.fmtTime(v) + '</span>'; }},
+    { field: 'log_type', title: '类型', width: 96, render: function (v) {
+      var t = TYPE[v] || [v, 'info'];
+      return '<span class="jd-tag jd-tag--' + t[1] + '">' + t[0] + '</span>';
+    }},
+    { field: 'actor_name', title: '操作人', width: 100, render: function (v, r) {
+      return JD.esc(v || '-') + '<div class="jd-hint">' + JD.esc(r.ip || '') + '</div>';
+    }},
+    { field: 'action', title: '动作', width: 180 },
+    { field: 'target', title: '对象 / 详情', render: function (v, r) {
+      return JD.esc(v || '-') + (r.detail ? '<div class="jd-hint">' + JD.esc(r.detail) + '</div>' : '');
+    }},
+    { field: 'result', title: '结果', width: 90, render: function (v) {
+      return v === 'SUCCESS' ? '<span class="jd-tag jd-tag--success">成功</span>'
+        : '<span class="jd-tag jd-tag--danger">失败</span>';
+    }},
+    { field: 'cost_ms', title: '耗时', width: 76, className: 'num', render: function (v) { return (v || 0) + 'ms'; }}
+  ]
+});
+
+$('#btnSearch').on('click', function () {
+  tbl.setParams({ logType: $('#fType').val(), keyword: $.trim($('#kw').val()),
+    start: $('#start').val(), end: $('#end').val() });
+});
+$('#kw').on('keydown', function (e) { if (e.key === 'Enter') $('#btnSearch').click(); });
+{% endblock %}

@@ -1,0 +1,369 @@
+{% extends "layout.html" %}
+{% block title %}数据集目录 · 九豆高质量数据资产平台{% endblock %}
+{% block body %}
+<div class="jd-page">
+  <div class="jd-crumb">数据资产 <span>/</span> <b>数据集目录</b></div>
+
+  <div class="jd-toolbar">
+    <div class="jd-search">
+      <svg><use href="/static/img/icons.svg#i-search"></use></svg>
+      <input class="jd-input" id="kw" placeholder="搜索名称 / 编码 / 标签">
+    </div>
+    <select class="jd-select" id="fDomain" style="width:140px"></select>
+    <select class="jd-select" id="fClass" style="width:130px"></select>
+    <select class="jd-select" id="fStatus" style="width:120px"></select>
+    <button class="jd-btn jd-btn--primary" id="btnSearch">查询</button>
+    <button class="jd-btn" id="btnReset">重置</button>
+  </div>
+
+  <div class="jd-card jd-card__bd--flush" id="tbl"></div>
+</div>
+{% endblock %}
+
+{% block init %}
+var tbl, dsDomains = [], dsClasses = [];
+
+['ds_domain', 'ds_classification'].forEach(function (k) { });
+$('#fDomain').html('<option value="">全部领域</option>' + JD.dict('ds_domain').map(function (o) {
+  return '<option value="' + o.value + '">' + o.label + '</option>';
+}).join(''));
+$('#fClass').html('<option value="">全部密级</option>' + JD.dict('ds_classification').map(function (o) {
+  return '<option value="' + o.value + '">' + o.label + '</option>';
+}).join(''));
+$('#fStatus').html('<option value="">全部状态</option>' + JD.dict('ds_status').map(function (o) {
+  return '<option value="' + o.value + '">' + o.label + '</option>';
+}).join(''));
+
+function statusTag(s) {
+  var m = { PUBLISHED: 'success', DRAFT: 'info', ARCHIVED: 'warning' };
+  return '<span class="jd-tag jd-tag--' + (m[s] || 'info') + '">' + JD.label('ds_status', s) + '</span>';
+}
+
+tbl = JD.table({
+  el: '#tbl', url: '/api/ds/list', pageSize: 10,
+  columns: [
+    { field: 'dataset_name', title: '数据集', render: function (v, r) {
+      return '<a href="javascript:;" class="js-detail" data-id="' + r.id + '">' + JD.esc(v) + '</a>' +
+        '<div class="jd-hint">' + JD.esc(r.dataset_code) + (r.tags ? ' · ' + JD.esc(r.tags) : '') + '</div>';
+    }},
+    { field: 'domain_code', title: '领域 / 模态', render: function (v, r) {
+      return JD.tag(JD.label('ds_domain', v), 'primary') + ' ' + JD.tag(JD.label('ds_modality', r.modality_code));
+    }},
+    { field: 'class_code', title: '密级', width: 90, render: function (v) {
+      var t = v === 'CONFIDENTIAL' ? 'danger' : (v === 'INTERNAL' ? 'warning' : 'success');
+      return '<span class="jd-tag jd-tag--' + t + '">' + JD.label('ds_classification', v) + '</span>';
+    }},
+    { field: 'sample_count', title: '样本', width: 92, className: 'num', render: function (v) { return JD.fmtNum(v); }},
+    { field: 'version_count', title: '版本', width: 62, className: 'num' },
+    { field: 'quality_score', title: '质量', width: 128, render: function (v, r) { return JD.qualityTag(v, r.quality_status); }},
+    { field: 'status', title: '状态', width: 86, render: function (v) { return statusTag(v); }},
+    { field: 'owner_name', title: '负责人', width: 82 },
+  ],
+  ops: [
+    { icon: 'eye', text: '详情', needRow: true, onClick: function (r) { openVersions(r.id); } },
+    { icon: 'layers', text: '版本', needRow: true, perm: 'dataset:version',
+      onClick: function (r) { openVersions(r.id); } },
+    { icon: 'upload', text: '发布 / 下线', needRow: true, perm: 'dataset:publish',
+      onClick: function (r) { togglePublish(r); } },
+    { icon: 'download', text: '下载最新版', needRow: true, perm: 'dataset:download',
+      onClick: function (r) { downloadLatest(r); } },
+    { icon: 'shield', text: '数据授权', needRow: true, perm: 'dataset:grant',
+      onClick: function (r) { openGrant(r); } },
+    { sep: true },
+    { icon: 'plus', text: '新建数据集', type: 'primary', perm: 'dataset:create',
+      onClick: function () { openCreate(); } },
+    { icon: 'trash', text: '删除', type: 'danger', needRow: true, perm: 'dataset:delete',
+      onClick: function (r) { removeDataset(r); } },
+    { icon: 'refresh', text: '刷新', onClick: function () { tbl.clearSelected(); tbl.reload(); } }
+  ],
+  hint: '选中一行后可查看详情 / 版本 / 发布 / 下载',
+  onLoaded: function () { JD.bindPerms($('#tbl')); }
+});
+
+$('#btnSearch').on('click', function () {
+  tbl.setParams({ keyword: $.trim($('#kw').val()), domain: $('#fDomain').val(),
+    classification: $('#fClass').val(), status: $('#fStatus').val() });
+});
+$('#btnReset').on('click', function () {
+  $('#kw').val(''); $('#fDomain').val(''); $('#fClass').val(''); $('#fStatus').val('');
+  tbl.setParams({ keyword: '', domain: '', classification: '', status: '' });
+});
+$('#kw').on('keydown', function (e) { if (e.key === 'Enter') $('#btnSearch').click(); });
+
+function togglePublish(r) {
+  var st = r.status === 'PUBLISHED' ? 'ARCHIVED' : 'PUBLISHED';
+  JD.confirm(st === 'PUBLISHED' ? '发布数据集' : '下线数据集',
+    st === 'PUBLISHED' ? '发布后将可被检索与下载，且必须通过质量门禁。' : '下线后该数据集不再对外可见。',
+    { okText: '确定' }).then(function (yes) {
+    if (!yes) return;
+    JD.post('/api/ds/publish', { id: r.id, status: st }).then(function () {
+      JD.alert('操作成功', '数据集状态已更新为「' + JD.label('ds_status', st) + '」', 'success');
+      tbl.clearSelected(); tbl.reload();
+    });
+  });
+}
+
+function downloadLatest(r) {
+  if (!r.latest_version_id) { JD.alert('暂无版本', '该数据集还没有可用版本，请先上传数据文件。', 'warning'); return; }
+  if (r.quality_status !== 'PASS') {
+    JD.confirm('质量门禁未通过', '当前版本质量结论为「未通过」，下载仅用于问题排查，不建议用于训练。是否继续？',
+      { okText: '继续下载' }).then(function (yes) {
+      if (yes) window.open('/api/ds/download?versionId=' + r.latest_version_id, '_blank');
+    });
+    return;
+  }
+  window.open('/api/ds/download?versionId=' + r.latest_version_id, '_blank');
+}
+
+/* ---------------- 数据授权（角色范围之外的例外授权） ---------------- */
+function openGrant(r) {
+  Promise.all([JD.get('/api/asset/grant/list', { datasetId: r.id }),
+               JD.get('/api/asset/grant/options')]).then(function (arr) {
+    var rows = arr[0] || [], opts = arr[1] || {};
+    var list = rows.map(function (g) {
+      return '<tr><td>' + ({ USER: '员工', ROLE: '角色', ORG: '机构' }[g.grantee_type] || g.grantee_type) +
+        '</td><td><b>' + JD.esc(g.grantee_name || g.grantee_id) + '</b></td>' +
+        '<td>' + (g.can_download === 1 ? '<span class="jd-tag jd-tag--success">可下载</span>'
+          : '<span class="jd-tag">仅查看</span>') + '</td>' +
+        '<td class="jd-hint">' + (g.expire_at ? JD.fmtTime(g.expire_at) : '长期') + '</td>' +
+        '<td class="ops"><a class="danger js-revoke" data-id="' + g.id + '">撤销</a></td></tr>';
+    }).join('');
+    var body = '<div class="jd-notice jd-mb12"><b>数据权限是两层模型：</b>角色 data_scope 决定「本人 / 本机构 / 全部」，' +
+      '这里的授权是<b>例外放行</b>——被授权的员工、角色或机构可以越过范围看到该数据集，并单独控制是否允许下载。</div>' +
+      '<div class="jd-flex jd-mb12" style="flex-wrap:wrap">' +
+      '<select class="jd-select" id="gType" style="width:110px"><option value="USER">员工</option>' +
+      '<option value="ROLE">角色</option><option value="ORG">机构</option></select>' +
+      '<select class="jd-select" id="gWho" style="width:230px"></select>' +
+      '<label class="jd-check"><input type="checkbox" id="gDl" checked>可下载</label>' +
+      '<input class="jd-input" type="date" id="gExp" style="width:150px" title="过期时间（可空）">' +
+      '<button class="jd-btn jd-btn--primary" data-act="add">添加授权</button></div>' +
+      '<div class="jd-table-wrap"><table class="jd-table"><thead><tr><th>类型</th><th>对象</th>' +
+      '<th>权限</th><th>有效期</th><th>操作</th></tr></thead><tbody>' +
+      (list || '<tr><td colspan="5"><div class="jd-empty">暂无例外授权</div></td></tr>') +
+      '</tbody></table></div>';
+    JD.dialog({
+      title: '数据授权 · ' + r.dataset_name, width: 'jd-dialog--lg', body: body,
+      footer: '<button class="jd-btn" data-act="close">关闭</button>',
+      onOpen: function ($m, close) {
+        function fillWho() {
+          var t = $m.find('#gType').val();
+          $m.find('#gWho').html((opts[t] || []).map(function (o) {
+            return '<option value="' + o.id + '">' + JD.esc(o.name) +
+              (o.email ? '（' + JD.esc(o.email) + '）' : '') + '</option>';
+          }).join(''));
+        }
+        fillWho();
+        $m.on('change', '#gType', fillWho);
+        $m.on('click', '[data-act="close"]', close);
+        $m.on('click', '[data-act="add"]', function () {
+          JD.post('/api/asset/grant/save', {
+            datasetId: r.id, granteeType: $m.find('#gType').val(),
+            granteeId: $m.find('#gWho').val(),
+            canDownload: $m.find('#gDl').is(':checked') ? 1 : 0,
+            expireAt: $m.find('#gExp').val() || null
+          }).then(function () {
+            JD.alert('已授权', '授权已生效，对方下次请求即可看到该数据集', 'success');
+            close(); openGrant(r);
+          });
+        });
+        $m.on('click', '.js-revoke', function () {
+          var gid = $(this).data('id');
+          JD.confirm('撤销授权', '撤销后对方将立即失去该数据集的访问权限。', { danger: true, okText: '撤销' })
+            .then(function (yes) {
+              if (!yes) return;
+              JD.post('/api/asset/grant/delete', { id: gid }).then(function () {
+                close(); openGrant(r);
+              });
+            });
+        });
+      }
+    });
+  });
+}
+
+function removeDataset(r) {
+  JD.confirm('删除数据集', '确认删除「' + r.dataset_name + '」？执行软删除，版本与审计记录仍保留。',
+    { danger: true, okText: '删除' }).then(function (yes) {
+    if (!yes) return;
+    JD.post('/api/ds/delete', { id: r.id }).then(function () {
+      JD.alert('已删除', '数据集已删除', 'success');
+      tbl.clearSelected(); tbl.reload();
+    });
+  });
+}
+
+/* ---------------- 新建 / 编辑 ---------------- */
+function dsFields(d) {
+  return [
+    { name: 'dataset_code', label: '数据集编码', required: true, readonly: !!d,
+      placeholder: '如 DS-NLP-005', hint: d ? '编码创建后不可修改' : '全局唯一，建议 领域-编号' },
+    { name: 'dataset_name', label: '数据集名称', required: true },
+    { name: 'domain_code', label: '所属领域', type: 'select', required: true,
+      options: JD.dict('ds_domain') },
+    { name: 'modality_code', label: '数据模态', type: 'select', required: true,
+      options: JD.dict('ds_modality') },
+    { name: 'class_code', label: '数据密级', type: 'select', required: true,
+      options: JD.dict('ds_classification'), value: 'INTERNAL' },
+    { name: 'tags', label: '标签', placeholder: '逗号分隔，如 SFT,中文,指令' },
+    { name: 'description', label: '数据集说明', type: 'textarea', span: 2, rows: 3,
+      placeholder: '数据来源、标注方式、适用范围等' }
+  ];
+}
+
+function openCreate() {
+  JD.formDialog({
+    title: '新建数据集', width: 'jd-dialog--lg', fields: dsFields(false),
+    onSubmit: function (v) {
+      return JD.post('/api/ds/save', v).then(function (r) {
+        JD.alert('创建成功', '数据集已创建，并已自动套用 4 条默认质量规则（含 2 条硬性门禁）。', 'success');
+        tbl.reload(true);
+        return true;
+      });
+    }
+  });
+}
+
+/* ---------------- 版本管理 ---------------- */
+function openVersions(id) {
+  JD.get('/api/ds/detail', { id: id }).then(function (d) {
+    var ds = d.dataset;
+    var rows = d.versions.map(function (v) {
+      return '<tr><td><b>' + JD.esc(v.version_no) + '</b>' +
+        (v.status === 'RELEASED' ? ' <span class="jd-tag jd-tag--success">已发布</span>' : '') +
+        '<div class="jd-code" style="margin-top:3px">' + JD.esc((v.manifest_hash || '').slice(0, 16)) + '…</div></td>' +
+        '<td class="num">' + JD.fmtNum(v.sample_count) + '</td>' +
+        '<td class="num">' + JD.fmtSize(v.size_bytes) + '</td>' +
+        '<td>' + JD.qualityTag(v.quality_score, v.quality_status) + '</td>' +
+        '<td class="jd-hint">' + JD.esc(v.creator || '-') + '<br>' + JD.fmtTime(v.created_at) + '</td>' +
+        '<td class="ops"><a class="js-q" data-id="' + v.id + '">质量详情</a>' +
+        '<a class="js-dl" data-id="' + v.id + '">下载</a>' +
+        '<a class="js-run" data-id="' + v.id + '">复算</a></td></tr>';
+    }).join('');
+    var body = '<div class="jd-flex jd-mb12" style="flex-wrap:wrap">' +
+      '<div><b>' + JD.esc(ds.dataset_name) + '</b> <span class="jd-hint">' + JD.esc(ds.dataset_code) + '</span></div>' +
+      '<span class="jd-grow"></span>' +
+      '<button class="jd-btn jd-btn--primary jd-btn--sm" id="btnUp" data-perm="dataset:version">上传新版本</button></div>' +
+      '<div class="jd-notice jd-mb12"><b>版本不可变：</b>每个版本由 manifest 哈希唯一标识（内容寻址），' +
+      '创建后不可覆盖；同内容的文件在对象存储中自动去重。发布前必须通过质量门禁。</div>' +
+      '<div class="jd-table-wrap"><table class="jd-table"><thead><tr><th>版本</th><th class="num">样本</th>' +
+      '<th class="num">大小</th><th>质量</th><th>创建</th><th>操作</th></tr></thead><tbody>' +
+      (rows || '<tr><td colspan="6"><div class="jd-empty">尚无版本，请先上传数据文件</div></td></tr>') +
+      '</tbody></table></div>';
+    var dlg = JD.dialog({
+      title: '版本管理', width: 'jd-dialog--xl', body: body,
+      footer: '<button class="jd-btn" data-act="close">关闭</button>',
+      onOpen: function ($m, close) {
+        JD.bindPerms($m);
+        if (!JD.hasPerm('dataset:download')) $m.find('.js-dl').remove();
+        if (!JD.hasPerm('quality:run')) $m.find('.js-run').remove();
+        $m.on('click', '[data-act="close"]', close);
+        $m.on('click', '#btnUp', function () { uploadDialog(id, close); });
+        $m.on('click', '.js-q', function () { qualityDialog($(this).data('id')); });
+        $m.on('click', '.js-dl', function () {
+          window.open('/api/ds/download?versionId=' + $(this).data('id'), '_blank');
+        });
+        $m.on('click', '.js-run', function () {
+          var vid = $(this).data('id');
+          JD.loading(true, '正在复算质量门禁…');
+          JD.post('/api/ds/quality/run', { versionId: vid }).then(function (r) {
+            JD.loading(false);
+            JD.alert('复算完成', '综合得分 ' + r.score + '，结论 ' + (r.status === 'PASS' ? '通过' : '未通过'), 'info');
+            close(); openVersions(id); tbl.reload();
+          }).catch(function () { JD.loading(false); });
+        });
+      }
+    });
+  });
+}
+
+function uploadDialog(datasetId, parentClose) {
+  var maxMb = JD.state.boot.uploadMaxMb || 200;
+  var ext = JD.state.boot.uploadAllowExt || 'csv';
+  var body =
+    '<div class="jd-field"><label class="jd-field__label">数据文件 <span class="req">*</span></label>' +
+    '<input type="file" class="jd-input" id="upFile" accept=".' + ext.split(',').join(',.') + '" style="padding-top:6px">' +
+    '<div class="jd-field__hint">支持 ' + JD.esc(ext) + '，单文件不超过 ' + maxMb + ' MB。上传后系统将计算 SHA256、' +
+    '生成 manifest 并执行质量门禁。</div></div>' +
+    '<div class="jd-field"><label class="jd-field__label">版本号</label>' +
+    '<input class="jd-input" id="upVer" placeholder="留空自动生成 v1.N.0"></div>' +
+    '<div class="jd-field"><label class="jd-field__label">版本说明</label>' +
+    '<input class="jd-input" id="upNote" placeholder="如：修复空值、去除重复样本"></div>';
+  JD.dialog({
+    title: '上传新版本', width: 'jd-dialog', body: body,
+    footer: '<button class="jd-btn" data-act="cancel">取消</button>' +
+      '<button class="jd-btn jd-btn--primary" data-act="ok">上传并校验</button>',
+    onOpen: function ($m, close) {
+      $m.on('click', '[data-act="cancel"]', close);
+      $m.on('click', '[data-act="ok"]', function () {
+        var f = $('#upFile')[0].files[0];
+        if (!f) { JD.alert('提示', '请选择数据文件', 'warning'); return; }
+        if (f.size > maxMb * 1024 * 1024) {
+          JD.alert('文件过大', '文件大小 ' + JD.fmtSize(f.size) + '，超过系统参数限制 ' + maxMb + ' MB。' +
+            '可联系管理员在「系统参数」中调整 upload.max_size_mb。', 'warning');
+          return;
+        }
+        var fd = new FormData();
+        fd.append('file', f);
+        fd.append('datasetId', datasetId);
+        fd.append('versionNo', $('#upVer').val());
+        fd.append('note', $('#upNote').val());
+        JD.loading(true, '上传并执行质量门禁…');
+        JD.upload('/api/ds/version/upload', fd).then(function (r) {
+          JD.loading(false);
+          close();
+          if (parentClose) parentClose();
+          var txt = '版本 ' + r.versionNo + ' 已创建，样本 ' + JD.fmtNum(r.rows) + ' 条，综合得分 ' + r.score +
+            '，结论：' + (r.status === 'PASS' ? '通过（可发布）' : '未通过（存在硬性门禁未达标，不可发布）');
+          JD.alert('上传完成', txt, r.status === 'PASS' ? 'success' : 'warning').then(function () {
+            openVersions(datasetId); tbl.reload();
+          });
+        }).catch(function () { JD.loading(false); });
+      });
+    }
+  });
+}
+
+/* ---------------- 质量详情 ---------------- */
+function qualityDialog(versionId) {
+  JD.get('/api/ds/version/quality', { versionId: versionId }).then(function (d) {
+    var v = d.version;
+    var runs = d.runs.map(function (r) {
+      var pct = Math.min(100, Number(r.score));
+      var bad = Number(r.passed) !== 1;
+      var metric = r.metric_json || '';
+      var samples = r.sample_json || '';
+      try { metric = JSON.stringify(JSON.parse(metric)); } catch (e) { }
+      return '<div style="padding:12px 0;border-bottom:1px solid var(--border-light)">' +
+        '<div class="jd-flex"><b>' + JD.esc(r.rule_name) + '</b>' +
+        (r.severity === 'HARD' ? ' <span class="jd-tag jd-tag--danger">硬性门禁</span>'
+          : ' <span class="jd-tag jd-tag--info">软性计分</span>') +
+        '<span class="jd-grow"></span>' +
+        (bad ? '<span class="jd-tag jd-tag--danger">未达标</span>' : '<span class="jd-tag jd-tag--success">达标</span>') +
+        '<b style="margin-left:8px">' + Number(r.score).toFixed(2) + '</b></div>' +
+        '<div class="jd-progress jd-mt8"><i style="width:' + pct + '%;background:' +
+        (bad ? 'var(--danger)' : 'var(--success)') + '"></i></div>' +
+        '<div class="jd-hint jd-mt8">指标：<span class="jd-code">' + JD.esc(metric) + '</span></div>' +
+        (samples && samples !== '[]' ? '<div class="jd-hint jd-mt8">失败样本：<span class="jd-code">' +
+          JD.esc(String(samples).slice(0, 300)) + '</span></div>' : '') +
+        '</div>';
+    }).join('');
+    var body = '<div class="jd-flex jd-mb8" style="flex-wrap:wrap">' +
+      '<div><b>' + JD.esc(v.dataset_name) + ' · ' + JD.esc(v.version_no) + '</b>' +
+      '<div class="jd-hint">manifest ' + JD.esc((v.manifest_hash || '').slice(0, 24)) + '…</div></div>' +
+      '<span class="jd-grow"></span>' + JD.qualityTag(v.quality_score, v.quality_status) + '</div>' +
+      '<div class="jd-notice jd-mb12">综合得分是加权结果，<b>结论由硬性门禁决定</b>：' +
+      '硬性规则未达标时即使得分较高也判定为未通过，不允许发布。</div>' +
+      (runs || '<div class="jd-empty">尚无质量结果</div>');
+    JD.dialog({
+      title: '质量门禁详情', width: 'jd-dialog--lg', body: body,
+      footer: '<button class="jd-btn" data-act="close">关闭</button>',
+      onOpen: function ($m, close) { $m.on('click', '[data-act="close"]', close); }
+    });
+  });
+}
+
+/* ---------------- 事件绑定 ---------------- */
+$('#tbl').on('click', '.js-detail', function () { openVersions($(this).data('id')); });
+var initId = new URLSearchParams(location.search).get('id');
+if (initId) openVersions(initId);
+{% endblock %}

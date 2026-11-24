@@ -1,0 +1,269 @@
+{% extends "layout.html" %}
+{% block title %}标注任务 · 九豆高质量数据资产平台{% endblock %}
+{% block body %}
+<div class="jd-page">
+  <div class="jd-crumb">数据资产 <span>/</span> <b>标注任务</b></div>
+
+  <div class="jd-notice jd-mb12">
+    <b>标注闭环</b>：建任务时按版本文件自动抽样 → 标注员逐条提交（写入 ds_annotation，
+    支持多人重复标注）→ 任务完成度与<b>标注一致性（Cohen's Kappa）</b>、抽检准确率实时可查。
+  </div>
+
+  <div class="jd-toolbar">
+    <div class="jd-search">
+      <svg><use href="/static/img/icons.svg#i-search"></use></svg>
+      <input class="jd-input" id="kw" placeholder="任务名称 / 编码">
+    </div>
+    <select class="jd-select" id="fStatus" style="width:130px">
+      <option value="">全部状态</option>
+      <option value="PENDING">待开始</option>
+      <option value="RUNNING">进行中</option>
+      <option value="DONE">已完成</option>
+    </select>
+    <label class="jd-check" style="margin:0 4px">
+      <input type="checkbox" id="fMine">只看我的
+    </label>
+    <button class="jd-btn jd-btn--primary" id="btnSearch">查询</button>
+    <button class="jd-btn" id="btnReset">重置</button>
+  </div>
+
+  <div class="jd-card jd-card__bd--flush" id="tbl"></div>
+</div>
+{% endblock %}
+
+{% block init %}
+var tbl;
+
+function statusTag(s) {
+  var m = { PENDING: ['待开始', 'info'], RUNNING: ['进行中', 'warning'], DONE: ['已完成', 'success'] };
+  var x = m[s] || [s, 'info'];
+  return '<span class="jd-tag jd-tag--' + x[1] + '">' + x[0] + '</span>';
+}
+
+tbl = JD.table({
+  el: '#tbl', url: '/api/asset/label/list', pageSize: 15,
+  columns: [
+    { field: 'task_name', title: '任务', render: function (v, r) {
+      return '<b>' + JD.esc(v) + '</b><div class="jd-hint">' + JD.esc(r.task_code) +
+        ' · 字段 ' + JD.esc(r.label_field) + '</div>';
+    }},
+    { field: 'dataset_name', title: '数据集 / 版本', width: 210, render: function (v, r) {
+      return JD.esc(v) + '<div class="jd-hint">' + JD.esc(r.version_no || '-') + '</div>';
+    }},
+    { field: 'sample_total', title: '进度', width: 160, render: function (v, r) {
+      var done = r.done_real || 0;
+      var pct = v ? Math.round(done / v * 100) : 0;
+      return '<div class="jd-hint jd-mb8" style="margin-bottom:4px">' + done + ' / ' + v + '（' + pct + '%）</div>' +
+        '<div class="jd-progress"><i style="width:' + pct + '%;background:' +
+        (pct >= 100 ? 'var(--success)' : 'var(--primary)') + '"></i></div>';
+    }},
+    { field: 'status', title: '状态', width: 90, render: function (v) { return statusTag(v); }},
+    { field: 'assignee_name', title: '负责人', width: 100, render: function (v) {
+      return v ? JD.esc(v) : '<span class="jd-hint">待领取</span>';
+    }},
+    { field: 'due_at', title: '截止', width: 120, render: function (v) {
+      return '<span class="jd-hint">' + (v ? JD.fmtTime(v) : '-') + '</span>';
+    }},
+    { field: 'created_at', title: '创建时间', width: 140, render: function (v) {
+      return '<span class="jd-hint">' + JD.fmtTime(v) + '</span>';
+    }}
+  ],
+  ops: [
+    { icon: 'plus', text: '新建任务', type: 'primary', perm: 'label:create',
+      onClick: function () { openForm(); } },
+    { icon: 'check-square', text: '开始标注', needRow: true, perm: 'label:annotate',
+      onClick: function (r) { openWorkbench(r); } },
+    { icon: 'history', text: '一致性统计', needRow: true, onClick: function (r) { openStats(r); } },
+    { icon: 'trash', text: '删除', type: 'danger', needRow: true, perm: 'label:delete',
+      onClick: function (r) { removeTask(r); } },
+    { icon: 'refresh', text: '刷新', onClick: function () { tbl.clearSelected(); tbl.reload(); } }
+  ],
+  hint: '选中任务后可进入标注工作台 / 查看一致性统计'
+});
+
+function query() {
+  tbl.setParams({ keyword: $.trim($('#kw').val()), status: $('#fStatus').val(),
+    mine: $('#fMine').is(':checked') ? 1 : '' });
+}
+$('#btnSearch').on('click', query);
+$('#btnReset').on('click', function () {
+  $('#kw').val(''); $('#fStatus').val(''); $('#fMine').prop('checked', false); query();
+});
+$('#kw').on('keydown', function (e) { if (e.key === 'Enter') query(); });
+$('#fMine').on('change', query);
+
+function openForm() {
+  Promise.all([JD.get('/api/ds/options'), JD.get('/api/system/employee/options')])
+    .then(function (arr) {
+      var ds = arr[0] || [], emps = arr[1] || [], headMap = {};
+      JD.formDialog({
+        title: '新建标注任务', width: 'jd-dialog--lg',
+        fields: [
+          { name: 'task_code', label: '任务编码', required: true,
+            value: 'T_' + Date.now().toString().slice(-8) },
+          { name: 'task_name', label: '任务名称', required: true },
+          { name: 'dataset_id', label: '数据集（取最近版本）', type: 'select', required: true, span: 2,
+            options: ds.map(function (o) { return { value: o.id, label: o.dataset_name }; }),
+            onChange: function (n, api) {
+              if (n !== 'dataset_id') return;
+              var did = api.val('dataset_id');
+              api.setOptions('label_field', []);
+              if (!did) { api.hint('label_field', '选择数据集后自动加载该版本 CSV 的列名'); return; }
+              api.hint('label_field', '正在读取版本表头…');
+              JD.get('/api/asset/fields', { datasetId: did }).then(function (fd) {
+                headMap[did] = fd.fields || [];
+                api.setOptions('label_field', (fd.header || []).map(function (h) {
+                  return { value: h, label: h };
+                }));
+                api.hint('label_field', '来自 ' + fd.file + '（v' + fd.version +
+                  '，' + (fd.header || []).length + ' 列 ' + fd.row_count + ' 行）');
+              }).catch(function () {
+                api.hint('label_field', '表头读取失败，请先在数据集新建版本');
+              });
+            } },
+          { name: 'label_field', label: '标注字段', type: 'select', required: true,
+            options: [], placeholder: false,
+            hint: '选择数据集后自动加载该版本 CSV 的列名',
+            onChange: function (n, api) {
+              if (n !== 'label_field') return;
+              var did = api.val('dataset_id'), f = api.val('label_field');
+              if (!f || api.val('label_options')) return;
+              var hit = (headMap[did] || []).filter(function (x) { return x.name === f; })[0];
+              if (!hit || !hit.samples || !hit.samples.length) return;
+              var uniq = [];
+              hit.samples.forEach(function (s) {
+                s = String(s).trim();
+                if (s && uniq.indexOf(s) < 0 && uniq.length < 6) uniq.push(s);
+              });
+              if (uniq.length) api.set('label_options', uniq.join(','));
+            } },
+          { name: 'label_options', label: '可选标签', required: true,
+            placeholder: '如 positive,neutral,negative', hint: '逗号分隔，标注时按此渲染按钮' },
+          { name: 'sample_size', label: '抽样条数', type: 'number', value: 30 },
+          { name: 'assignee_id', label: '指派给', type: 'select',
+            options: [{ value: '', label: '待领取（所有人可见）' }].concat(
+              emps.map(function (e) { return { value: e.id, label: e.real_name + '（' + (e.dept_name || '-') + '）' }; })) },
+          { name: 'due_at', label: '截止时间', type: 'date' }
+        ],
+        data: { sample_size: 30, task_code: 'T_' + Date.now().toString().slice(-8) },
+        onSubmit: function (v) {
+          v.assignee_id = v.assignee_id || '';
+          return JD.post('/api/asset/label/save', v).then(function () {
+            JD.alert('已创建', '任务已创建，可直接进入标注工作台开始标注', 'success');
+            tbl.reload(true);
+            return true;
+          });
+        }
+      });
+    });
+}
+
+function openWorkbench(task) {
+  JD.get('/api/asset/label/items', { taskId: task.id }).then(function (d) {
+    var opts = d.options || [];
+    var items = d.rows || [];
+    var idx = items.findIndex(function (x) { return x.status !== 'DONE'; });
+    if (idx < 0) idx = 0;
+
+    function renderOne() {
+      if (!items.length) return '<div class="jd-empty">该任务没有样本</div>';
+      var it = items[idx];
+      var btns = opts.map(function (o) {
+        return '<button class="jd-btn ' + (it.label_value === o ? 'jd-btn--primary' : '') +
+          '" data-label="' + JD.esc(o) + '">' + JD.esc(o) + '</button>';
+      }).join(' ');
+      var done = items.filter(function (x) { return x.status === 'DONE'; }).length;
+      return '<div class="jd-flex jd-mb8"><span class="jd-hint">第 ' + (idx + 1) + ' / ' + items.length +
+        ' 条 · 已完成 ' + done + ' 条</span><span class="jd-grow"></span>' +
+        (it.status === 'DONE' ? '<span class="jd-tag jd-tag--success">已标注</span>' : '') + '</div>' +
+        '<div class="jd-progress jd-mb12"><i style="width:' +
+        (items.length ? Math.round(done / items.length * 100) : 0) + '%"></i></div>' +
+        '<div style="border:1px solid var(--border-light);border-radius:10px;padding:16px;min-height:110px;' +
+        'line-height:1.85;background:var(--bg-stripe)">' + JD.esc(it.sample_text) + '</div>' +
+        '<div class="jd-hint jd-mt8">' + JD.esc(it.sample_meta || '') + '</div>' +
+        '<div class="jd-mt16 jd-flex" style="flex-wrap:wrap;gap:8px">' + btns + '</div>' +
+        '<div class="jd-mt12"><input class="jd-input" id="lbCustom" placeholder="也可以直接输入标签值后回车"></div>';
+    }
+
+    var dlg = JD.dialog({
+      title: '标注工作台 · ' + task.task_name, width: 'jd-dialog--lg',
+      body: '<div id="wbBody">' + renderOne() + '</div>',
+      footer: '<button class="jd-btn" data-act="prev">上一条</button>' +
+        '<button class="jd-btn" data-act="next">下一条</button>' +
+        '<button class="jd-btn jd-btn--primary" data-act="close">完成</button>',
+      onOpen: function ($m, close) {
+        function repaint() { $m.find('#wbBody').html(renderOne()); }
+        $m.on('click', '[data-act="close"]', function () { close(); tbl.reload(); });
+        $m.on('click', '[data-act="prev"]', function () {
+          if (idx > 0) { idx--; repaint(); }
+        });
+        $m.on('click', '[data-act="next"]', function () {
+          if (idx < items.length - 1) { idx++; repaint(); }
+        });
+        $m.on('click', '[data-label]', function () { submit($(this).data('label')); });
+        $m.on('keydown', '#lbCustom', function (e) {
+          if (e.key === 'Enter') {
+            var v = $.trim($(this).val());
+            if (v) submit(v);
+          }
+        });
+        function submit(val) {
+          var it = items[idx];
+          JD.post('/api/asset/label/submit', { itemId: it.id, labelValue: val })
+            .then(function () {
+              it.status = 'DONE'; it.label_value = val;
+              var next = items.findIndex(function (x, i) { return i > idx && x.status !== 'DONE'; });
+              if (next > 0) idx = next;
+              repaint();
+            });
+        }
+      }
+    });
+    return dlg;
+  });
+}
+
+function openStats(task) {
+  JD.get('/api/asset/label/stats', { taskId: task.id }).then(function (d) {
+    var dist = (d.distribution || []).map(function (x) {
+      return '<div class="jd-flex jd-mb8"><span style="width:120px">' + JD.esc(x.label_value) + '</span>' +
+        '<div class="jd-progress" style="flex:1"><i style="width:' +
+        (d.task.sample_done ? Math.round(x.c / d.task.sample_done * 100) : 0) + '%"></i></div>' +
+        '<span class="jd-hint" style="width:48px;text-align:right">' + x.c + '</span></div>';
+    }).join('') || '<div class="jd-empty">还没有标注结果</div>';
+    var kappa = d.kappa === null || d.kappa === undefined ? '—' : d.kappa;
+    var quality = d.kappa === null || d.kappa === undefined ? ''
+      : (d.kappa >= 0.8 ? '<span class="jd-tag jd-tag--success">高度一致</span>'
+        : (d.kappa >= 0.6 ? '<span class="jd-tag jd-tag--warning">中等一致</span>'
+          : '<span class="jd-tag jd-tag--danger">一致性偏低，建议修订标注规范</span>'));
+    JD.dialog({
+      title: '一致性统计 · ' + task.task_name, width: 'jd-dialog--lg',
+      body: '<div class="jd-flex jd-mb12" style="flex-wrap:wrap;gap:18px">' +
+        '<div><div class="jd-hint">完成度</div><b style="font-size:18px">' + d.task.sample_done +
+        ' / ' + d.task.sample_total + '</b></div>' +
+        '<div><div class="jd-hint">重复标注对数</div><b style="font-size:18px">' + d.pair_count + '</b></div>' +
+        '<div><div class="jd-hint">标注一致率</div><b style="font-size:18px">' +
+        (d.agreement === null ? '—' : d.agreement + '%') + '</b></div>' +
+        '<div><div class="jd-hint">Cohen Kappa</div><b style="font-size:18px">' + kappa + '</b> ' + quality + '</div>' +
+        '<div><div class="jd-hint">抽检准确率</div><b style="font-size:18px">' +
+        (d.gold_acc === null ? '—' : d.gold_acc + '%') + '</b></div></div>' +
+        '<div class="jd-notice jd-mb12">Kappa ≥ 0.8 视为高度一致；0.6–0.8 可接受；低于 0.6 说明标注规范或样本难度存在问题。' +
+        '需要两名以上标注员对同一样本重复标注后才会产生该指标。</div>' +
+        '<h3 style="font-size:13px;margin-bottom:10px">标签分布</h3>' + dist,
+      footer: '<button class="jd-btn" data-act="close">关闭</button>',
+      onOpen: function ($m, close) { $m.on('click', '[data-act="close"]', close); }
+    });
+  });
+}
+
+function removeTask(r) {
+  JD.confirm('删除任务', '将同时删除「' + r.task_name + '」的样本与标注明细，操作不可恢复。',
+    { danger: true, okText: '删除' }).then(function (yes) {
+    if (!yes) return;
+    JD.post('/api/asset/label/delete', { id: r.id }).then(function () {
+      JD.alert('已删除', '任务已删除', 'success');
+      tbl.clearSelected(); tbl.reload();
+    });
+  });
+}
+{% endblock %}

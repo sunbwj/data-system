@@ -1,0 +1,154 @@
+{% extends "layout.html" %}
+{% block title %}角色管理 · 九豆高质量数据资产平台{% endblock %}
+{% block body %}
+<div class="jd-page">
+  <div class="jd-crumb">系统管理 <span>/</span> <b>角色管理</b></div>
+
+  <div class="jd-toolbar">
+    <div class="jd-search">
+      <svg><use href="/static/img/icons.svg#i-search"></use></svg>
+      <input class="jd-input" id="kw" placeholder="角色名称 / 编码">
+    </div>
+    <button class="jd-btn jd-btn--primary" id="btnSearch">查询</button>
+    <button class="jd-btn" id="btnReset">重置</button>
+    <span class="jd-hint">权限点编码发布后不可修改，否则历史授权会失效</span>
+  </div>
+
+  <div class="jd-card jd-card__bd--flush" id="tbl"></div>
+</div>
+{% endblock %}
+
+{% block init %}
+var tbl;
+
+function scopeLabel(s) {
+  return { ALL: '全部数据', ORG: '本机构', SELF: '仅本人', CUSTOM: '自定义' }[s] || s;
+}
+
+tbl = JD.table({
+  el: '#tbl', url: '/api/system/role/list', pageSize: 20,
+  columns: [
+    { field: 'role_name', title: '角色', render: function (v, r) {
+      return '<b>' + JD.esc(v) + '</b><div class="jd-hint">' + JD.esc(r.role_code) + '</div>';
+    }},
+    { field: 'data_scope', title: '数据范围', width: 110, render: function (v) {
+      return '<span class="jd-tag jd-tag--primary">' + scopeLabel(v) + '</span>';
+    }},
+    { field: 'perm_count', title: '权限点', width: 90, className: 'num', render: function (v) { return v + ' 个'; }},
+    { field: 'user_count', title: '用户数', width: 90, className: 'num' },
+    { field: 'remark', title: '说明', render: function (v) { return '<span class="jd-hint">' + JD.esc(v || '-') + '</span>'; }},
+  ],
+  ops: [
+    { icon: 'plus', text: '新增角色', type: 'primary', perm: 'sys:role:create',
+      onClick: function () { openForm(null); } },
+    { icon: 'shield', text: '权限设置', needRow: true, perm: 'sys:role:perm',
+      onClick: function (r) { openPerm(r); } },
+    { icon: 'edit', text: '编辑', needRow: true, perm: 'sys:role:edit',
+      onClick: function (r) { openForm(r); } },
+    { icon: 'trash', text: '删除', type: 'danger', needRow: true, perm: 'sys:role:delete',
+      onClick: function (r) { removeRole(r); } },
+    { icon: 'refresh', text: '刷新', onClick: function () { tbl.clearSelected(); tbl.reload(); } }
+  ],
+  hint: '选中角色后可设置权限（到按钮级）/ 编辑 / 删除',
+  onLoaded: function (d) {
+    window.__roles = d.rows || [];
+    JD.bindPerms($('#tbl'));
+  }
+});
+
+function roleOf(id) {
+  return (window.__roles || []).filter(function (x) { return x.id === id; })[0];
+}
+
+function query() { tbl.setParams({ keyword: $.trim($('#kw').val()) }); }
+$('#btnSearch').on('click', query);
+$('#btnReset').on('click', function () { $('#kw').val(''); query(); });
+$('#kw').on('keydown', function (e) { if (e.key === 'Enter') query(); });
+
+
+
+function openForm(r) {
+  JD.formDialog({
+    title: r ? '编辑角色' : '新增角色', width: 'jd-dialog',
+    fields: [
+      { name: 'role_code', label: '角色编码', required: true, readonly: !!r, placeholder: '如 ROLE_QC' },
+      { name: 'role_name', label: '角色名称', required: true },
+      { name: 'data_scope', label: '数据范围', type: 'select', required: true,
+        options: [{ value: 'ALL', label: '全部数据' }, { value: 'ORG', label: '本机构' },
+          { value: 'SELF', label: '仅本人' }, { value: 'CUSTOM', label: '自定义' }], value: 'SELF' },
+      { name: 'sort_no', label: '排序', type: 'number', value: 10 },
+      { name: 'remark', label: '说明', type: 'textarea', span: 2, rows: 2 },
+      { name: 'status', label: '启用', type: 'switch', span: 2 }
+    ],
+    data: r || { status: 1, data_scope: 'SELF', sort_no: 10 },
+    onSubmit: function (v) {
+      if (r) v.id = r.id;
+      return JD.post('/api/system/role/save', v).then(function () {
+        JD.alert('保存成功', '角色已保存' + (r ? '' : '，请继续为其配置权限'), 'success');
+        tbl.reload();
+        return true;
+      });
+    }
+  });
+}
+
+function removeRole(r) {
+  JD.confirm('删除角色', '删除「' + r.role_name + '」后需重新为相关用户分配角色，确定删除？',
+    { danger: true, okText: '删除' }).then(function (yes) {
+    if (!yes) return;
+    JD.post('/api/system/role/delete', { id: r.id }).then(function () {
+      tbl.clearSelected(); tbl.reload();
+    });
+  });
+}
+
+/* ---------------- 权限设置（到按钮级） ---------------- */
+function openPerm(role) {
+  var rid = role.id;
+  Promise.all([
+    JD.get('/api/system/menu/tree'),
+    JD.get('/api/system/role/perms', { roleId: rid }),
+    JD.get('/api/system/menu-group/list')
+  ]).then(function (arr) {
+    var nodes = arr[0], mine = arr[1], groups = arr[2] || [];
+    var body = '<div class="jd-flex jd-mb8" style="flex-wrap:wrap;gap:8px">' +
+      '<select class="jd-select" id="grpSel" style="width:200px">' +
+      '<option value="">选择菜单组快速授权</option>' +
+      groups.map(function (g) {
+        return '<option value="' + g.id + '">' + JD.esc(g.group_name) + '（' + g.item_count + ' 项）</option>';
+      }).join('') + '</select>' +
+      '<button class="jd-btn jd-btn--sm" data-act="apply">应用</button>' +
+      '<button class="jd-btn jd-btn--sm" data-act="all">全选</button>' +
+      '<button class="jd-btn jd-btn--sm" data-act="none">清空</button>' +
+      '<span class="jd-grow"></span><span class="jd-hint">已授予 ' + mine.length + ' 项</span></div>' +
+      '<div id="treeBox" style="max-height:50vh;overflow:auto;border:1px solid var(--border-light);border-radius:8px;padding:8px"></div>';
+    JD.dialog({
+      title: '权限设置 · ' + JD.esc(role.role_name || ''), width: 'jd-dialog--lg', body: body,
+      footer: '<button class="jd-btn" data-act="cancel">取消</button>' +
+        '<button class="jd-btn jd-btn--primary" data-act="save">保存权限</button>',
+      onOpen: function ($m, close) {
+        var api = JD.renderTree($m.find('#treeBox'), nodes, { checkable: true, checked: mine });
+        $m.on('click', '[data-act="all"]', function () { api.checkAll(true); });
+        $m.on('click', '[data-act="none"]', function () { api.checkAll(false); });
+        $m.on('click', '[data-act="apply"]', function () {
+          var gid = $('#grpSel').val();
+          if (!gid) { JD.alert('提示', '请先选择一个菜单组', 'warning'); return; }
+          JD.get('/api/system/menu-group/items', { groupId: gid }).then(function (ids) {
+            api.setChecked(ids);
+            JD.alert('已应用', '菜单组包含的 ' + ids.length + ' 个节点已勾选，可继续微调按钮权限', 'info');
+          });
+        });
+        $m.on('click', '[data-act="cancel"]', close);
+        $m.on('click', '[data-act="save"]', function () {
+          var ids = api.getChecked();
+          JD.post('/api/system/role/set-perms', { roleId: rid, menuIds: ids }).then(function (r) {
+            close();
+            JD.alert('已保存', '已授予 ' + r.count + ' 个权限点，相关用户下次请求即生效', 'success');
+            tbl.reload();
+          });
+        });
+      }
+    });
+  });
+}
+{% endblock %}

@@ -1,0 +1,132 @@
+{% extends "layout.html" %}
+{% block title %}我的信箱 · 九豆高质量数据资产平台{% endblock %}
+{% block body %}
+<div class="jd-page">
+  <div class="jd-crumb">消息中心 <span>/</span> <b>我的信箱</b></div>
+
+  <div style="display:grid;grid-template-columns:1fr 1.25fr;gap:12px;align-items:start">
+    <div>
+      <div class="jd-card jd-mb12">
+        <div class="jd-card__hd"><h3>信箱信息</h3><span class="jd-tag jd-tag--primary" id="smtpState">-</span></div>
+        <div class="jd-card__bd">
+          <div class="jd-field">
+            <label class="jd-field__label">我的信箱地址</label>
+            <input class="jd-input" id="addr" readonly>
+            <div class="jd-field__hint">平台内员工可互发邮件；外部地址走 SMTP 投递</div>
+          </div>
+          <div class="jd-field">
+            <label class="jd-field__label">邮件签名</label>
+            <textarea class="jd-textarea" id="signature" rows="2" placeholder="将自动附加在邮件正文末尾"></textarea>
+          </div>
+          <div class="jd-field">
+            <label class="jd-field__label">自动回复</label>
+            <textarea class="jd-textarea" id="autoReply" rows="2" placeholder="留空表示不自动回复"></textarea>
+          </div>
+          <div class="jd-split"></div>
+          <div class="jd-hint jd-mb8">外部邮箱绑定（可选，用于以个人邮箱发信）</div>
+          <div class="jd-form-grid">
+            <div class="jd-field"><label class="jd-field__label">SMTP 主机</label><input class="jd-input" id="smtpHost" placeholder="smtp.example.com"></div>
+            <div class="jd-field"><label class="jd-field__label">端口</label><input class="jd-input" id="smtpPort" placeholder="465"></div>
+            <div class="jd-field"><label class="jd-field__label">账号</label><input class="jd-input" id="smtpUser"></div>
+            <div class="jd-field"><label class="jd-field__label">密码 / 授权码</label><input class="jd-input" id="smtpPass" type="password" placeholder="不修改请留空"></div>
+          </div>
+          <button class="jd-btn jd-btn--primary jd-btn--block" id="btnSave" data-perm="msg:mailbox">保存配置</button>
+        </div>
+      </div>
+
+      <div class="jd-card">
+        <div class="jd-card__hd"><h3>平台技术支持</h3></div>
+        <div class="jd-card__bd">
+          <div class="jd-kv">
+            <dt>支持信箱</dt><dd id="supAddr">support@jiudou.com</dd>
+            <dt>支持机器人</dt><dd>{{ boot.botName }}</dd>
+            <dt>自动回复</dt><dd class="jd-hint" id="supAuto">-</dd>
+          </div>
+          <div class="jd-mt12"><a class="jd-btn" href="/pages/chat.html">发起即时对话</a></div>
+        </div>
+      </div>
+    </div>
+
+    <div>
+      <div class="jd-card jd-mb12">
+        <div class="jd-card__hd"><h3>写邮件</h3><span class="sub">站内员工即时送达</span></div>
+        <div class="jd-card__bd">
+          <div class="jd-field"><label class="jd-field__label">收件人 <span class="req">*</span></label>
+            <input class="jd-input" id="to" placeholder="如 zhangwei@jiudou.com 或外部邮箱"></div>
+          <div class="jd-field"><label class="jd-field__label">主题 <span class="req">*</span></label>
+            <input class="jd-input" id="subject" placeholder="邮件主题"></div>
+          <div class="jd-field"><label class="jd-field__label">正文 <span class="req">*</span></label>
+            <textarea class="jd-textarea" id="body" rows="7" placeholder="邮件正文，将自动追加你的签名"></textarea></div>
+          <button class="jd-btn jd-btn--primary" id="btnSend" data-perm="msg:mailbox">发送邮件</button>
+        </div>
+      </div>
+
+      <div class="jd-card jd-card__bd--flush">
+        <div class="jd-card__hd"><h3>收件记录</h3><span class="sub">含投递状态</span></div>
+        <div id="mailList"><div class="jd-empty">加载中…</div></div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block init %}
+var box = {};
+JD.get('/api/msg/mailbox/mine').then(function (d) {
+  box = d;
+  var m = d.mailbox || {};
+  $('#addr').val(m.address || '');
+  $('#signature').val(m.signature || '');
+  $('#autoReply').val(m.auto_reply || '');
+  $('#smtpHost').val(m.smtp_host || '');
+  $('#smtpPort').val(m.smtp_port || '');
+  $('#smtpUser').val(m.smtp_user || '');
+  $('#smtpState').text(d.smtpConfigured ? 'SMTP 已配置' : 'SMTP 未配置（开发模式）')
+    .attr('class', 'jd-tag jd-tag--' + (d.smtpConfigured ? 'success' : 'warning'));
+  if (d.support) {
+    $('#supAddr').text(d.support.address || 'support@jiudou.com');
+    $('#supAuto').text(d.support.auto_reply || '-');
+  }
+  loadMails();
+});
+
+function loadMails() {
+  JD.get('/api/msg/mailbox/inbox').then(function (rows) {
+    if (!rows.length) { $('#mailList').html('<div class="jd-empty">暂无邮件</div>'); return; }
+    $('#mailList').html('<table class="jd-table"><thead><tr><th>主题</th><th>状态</th><th>时间</th></tr></thead><tbody>' +
+      rows.map(function (r) {
+        var map = { SENT: ['已发送', 'success'], DELIVERED: ['已送达', 'success'],
+          READ: ['已读', 'info'], PENDING: ['待发送', 'warning'],
+          FAILED: ['投递失败', 'danger'], QUEUED: ['排队中', 'warning'] };
+        var pair = map[r.status] || [r.status, 'info'];
+        var stLabel = pair[0], stCls = pair[1];
+        return '<tr><td><b>' + JD.esc(r.title) + '</b><div class="jd-hint">' +
+          JD.esc((r.content || '').slice(0, 70).replace(/\n/g, ' ')) + '</div></td>' +
+          '<td><span class="jd-tag jd-tag--' + stCls + '">' + stLabel + '</span>' +
+          (r.error_msg ? '<div class="jd-hint">' + JD.esc(r.error_msg.slice(0, 40)) + '</div>' : '') + '</td>' +
+          '<td class="jd-hint">' + JD.fmtTime(r.created_at) + '</td></tr>';
+      }).join('') + '</tbody></table>');
+  });
+}
+
+$('#btnSave').on('click', function () {
+  JD.post('/api/msg/mailbox/save', {
+    signature: $('#signature').val(), auto_reply: $('#autoReply').val(),
+    smtp_host: $('#smtpHost').val(), smtp_port: $('#smtpPort').val() || null,
+    smtp_user: $('#smtpUser').val(), smtp_pass: $('#smtpPass').val(), use_ssl: 1
+  }).then(function () { JD.alert('已保存', '信箱配置已更新', 'success'); });
+});
+
+$('#btnSend').on('click', function () {
+  var to = $.trim($('#to').val()), subject = $.trim($('#subject').val()), body = $('#body').val();
+  if (!to || !subject || !body) { JD.alert('提示', '收件人、主题、正文均为必填', 'warning'); return; }
+  var sig = $('#signature').val();
+  var full = body + (sig ? '\n\n-- \n' + sig : '');
+  JD.post('/api/msg/mailbox/send', { to: to, subject: subject, body: full }).then(function (r) {
+    JD.alert('已提交', r.internal ? '已送达对方平台信箱，同时进入其「我的消息」。'
+      : '外部邮件已提交 SMTP 队列。', 'success');
+    $('#subject').val(''); $('#body').val('');
+    loadMails();
+  });
+});
+{% endblock %}

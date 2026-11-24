@@ -1,0 +1,81 @@
+{% extends "layout.html" %}
+{% block title %}机构信息 · 九豆高质量数据资产平台{% endblock %}
+{% block body %}
+<div class="jd-page">
+  <div class="jd-crumb">系统管理 <span>/</span> <b>机构信息</b></div>
+
+  <div style="display:grid;grid-template-columns:1.3fr 1fr;gap:12px;align-items:start">
+    <div class="jd-card">
+      <div class="jd-card__hd">
+        <h3>机构档案</h3>
+        <button class="jd-btn jd-btn--primary jd-btn--sm" id="btnSave" data-perm="sys:org:edit">保存</button>
+      </div>
+      <div class="jd-card__bd">
+        <div class="jd-form-grid">
+          <div class="jd-field"><label class="jd-field__label">机构编码 <span class="req">*</span></label>
+            <input class="jd-input" id="org_code" readonly></div>
+          <div class="jd-field"><label class="jd-field__label">机构名称 <span class="req">*</span></label>
+            <input class="jd-input" id="org_name"></div>
+          <div class="jd-field"><label class="jd-field__label">统一社会信用代码</label>
+            <input class="jd-input" id="credit_code"></div>
+          <div class="jd-field"><label class="jd-field__label">机构 LOGO 地址</label>
+            <input class="jd-input" id="logo_url" placeholder="/static/img/logo.svg"></div>
+          <div class="jd-field"><label class="jd-field__label">联系人</label>
+            <input class="jd-input" id="contact_name"></div>
+          <div class="jd-field"><label class="jd-field__label">联系邮箱</label>
+            <input class="jd-input" id="contact_email"></div>
+          <div class="jd-field"><label class="jd-field__label">联系电话</label>
+            <input class="jd-input" id="contact_phone"></div>
+          <div class="jd-field"><label class="jd-field__label">地址</label>
+            <input class="jd-input" id="address"></div>
+          <div class="jd-field span2"><label class="jd-field__label">备注</label>
+            <textarea class="jd-textarea" id="remark" rows="2"></textarea></div>
+        </div>
+      </div>
+    </div>
+
+    <div>
+      <div class="jd-card jd-mb12">
+        <div class="jd-card__hd"><h3>机构概览</h3></div>
+        <div class="jd-card__bd" id="overview"><div class="jd-empty">加载中…</div></div>
+      </div>
+      <div class="jd-card">
+        <div class="jd-card__hd"><h3>说明</h3></div>
+        <div class="jd-card__bd jd-hint" style="line-height:1.9">
+          机构是所有业务数据的隔离根：员工、数据集、审计日志均带 <span class="jd-code">org_id</span>。
+          即使当前只有一家机构，也不建议省略该字段——后补字段意味着全表回填与权限重构。
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block init %}
+var org = {};
+JD.get('/api/system/org').then(function (d) {
+  org = d;
+  ['org_code', 'org_name', 'credit_code', 'logo_url', 'contact_name', 'contact_email',
+    'contact_phone', 'address', 'remark'].forEach(function (k) { $('#' + k).val(d[k] || ''); });
+});
+
+$('#btnSave').on('click', function () {
+  if (!$.trim($('#org_name').val())) { JD.alert('提示', '机构名称不能为空', 'warning'); return; }
+  var v = { id: org.id };
+  ['org_code', 'org_name', 'credit_code', 'logo_url', 'contact_name', 'contact_email',
+    'contact_phone', 'address', 'remark'].forEach(function (k) { v[k] = $('#' + k).val(); });
+  JD.post('/api/system/org', v).then(function () {
+    JD.alert('保存成功', '机构信息已更新', 'success');
+  });
+});
+
+JD.get('/api/system/employee/list', { page: 1, size: 1 }).then(function (d) {
+  JD.get('/api/system/user/list', { page: 1, size: 1 }).then(function (u) {
+    $('#overview').html('<div class="jd-kv">' +
+      '<dt>员工总数</dt><dd><b style="font-size:16px">' + d.total + '</b> 人</dd>' +
+      '<dt>登录账号</dt><dd><b style="font-size:16px">' + u.total + '</b> 个</dd>' +
+      '<dt>机构编码</dt><dd><span class="jd-code">' + JD.esc(org.org_code || '-') + '</span></dd>' +
+      '<dt>创建时间</dt><dd>' + JD.fmtTime(org.created_at) + '</dd></div>');
+  });
+});
+{% endblock %}

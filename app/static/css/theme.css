@@ -1,0 +1,118 @@
+/* ===========================================================
+   九豆高质量数据资产平台 · 主题与设计令牌
+   换肤原理：全部组件只消费 CSS 变量，切换 <html data-theme> 即整体生效
+   =========================================================== */
+:root {
+  --primary: #2f6bff;
+  --primary-hover: #1f57e0;
+  --primary-active: #1a4bc4;
+  --primary-weak: #eaf1ff;
+  --primary-weak-2: #d7e5ff;
+  --success: #16a34a;
+  --success-weak: #e8f7ee;
+  --warning: #d97706;
+  --warning-weak: #fdf3e3;
+  --danger: #dc2626;
+  --danger-weak: #fdecec;
+  --info: #64748b;
+
+  --bg-body: #f2f5fa;
+  --bg-panel: #ffffff;
+  --bg-elevated: #ffffff;
+  --bg-hover: #f5f8fd;
+  --bg-stripe: #fafbfe;
+
+  --text-main: #1e2430;
+  --text-sub: #55607a;
+  --text-mute: #8b95ab;
+  --text-invert: #ffffff;
+
+  --border: #dfe5ef;
+  --border-light: #ebeef5;
+
+  --top-bg: #ffffff;
+  --top-text: #1e2430;
+  --left-bg: #ffffff;
+  --left-text: #46506b;
+  --left-active-bg: var(--primary-weak);
+  --left-active-text: var(--primary);
+
+  --down-bg: #f7f9fc;
+  --shadow-sm: 0 1px 2px rgba(20, 32, 63, .06);
+  --shadow: 0 4px 16px rgba(20, 32, 63, .08);
+  --shadow-lg: 0 18px 48px rgba(16, 26, 52, .18);
+  --radius: 8px;
+  --radius-sm: 6px;
+  --radius-lg: 14px;
+  --sidebar-w: 218px;
+  --top-h: 56px;
+  --down-h: 26px;
+}
+
+/* 科技蓝（默认） */
+[data-theme="blue"] { }
+
+/* 暗夜 */
+[data-theme="dark"] {
+  --primary: #5b8def;
+  --primary-hover: #749ef5;
+  --primary-active: #4879d6;
+  --primary-weak: #1f2f4d;
+  --primary-weak-2: #263a5c;
+  --bg-body: #171c26;
+  --bg-panel: #1f2531;
+  --bg-elevated: #232a38;
+  --bg-hover: #27303f;
+  --bg-stripe: #1c222d;
+  --text-main: #e8edf7;
+  --text-sub: #a8b3c7;
+  --text-mute: #74809a;
+  --border: #313b4d;
+  --border-light: #2a3342;
+  --top-bg: #1b212c;
+  --top-text: #e8edf7;
+  --left-bg: #1b212c;
+  --left-text: #b3bdd0;
+  --left-active-bg: #263a5c;
+  --left-active-text: #8fb3ff;
+  --down-bg: #1a202a;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, .4);
+  --shadow: 0 6px 20px rgba(0, 0, 0, .45);
+  --shadow-lg: 0 20px 50px rgba(0, 0, 0, .6);
+}
+
+/* 青碧 */
+[data-theme="teal"] {
+  --primary: #0f9b8e;
+  --primary-hover: #0b8479;
+  --primary-active: #087066;
+  --primary-weak: #e3f6f4;
+  --primary-weak-2: #c9ece8;
+  --bg-body: #f1f7f6;
+  --bg-hover: #f2faf9;
+  --left-active-bg: #e3f6f4;
+}
+
+/* 雅紫 */
+[data-theme="violet"] {
+  --primary: #6d5bd0;
+  --primary-hover: #5b49bd;
+  --primary-active: #4c3ca6;
+  --primary-weak: #efecfd;
+  --primary-weak-2: #ded8fb;
+  --bg-body: #f5f3fc;
+  --bg-hover: #f8f6ff;
+  --left-active-bg: #efecfd;
+}
+
+/* 暖橙 */
+[data-theme="amber"] {
+  --primary: #d97706;
+  --primary-hover: #b96604;
+  --primary-active: #9c5503;
+  --primary-weak: #fdf1e1;
+  --primary-weak-2: #fbe2c4;
+  --bg-body: #faf6f0;
+  --bg-hover: #fdf8f2;
+  --left-active-bg: #fdf1e1;
+}

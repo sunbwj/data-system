@@ -1,0 +1,407 @@
+{% extends "layout.html" %}
+{% block title %}即时对话 · 九豆高质量数据资产平台{% endblock %}
+{% block body %}
+<div class="jd-page jd-page--tight">
+  <div class="chat-layout">
+    <div class="jd-card chat-side">
+      <div class="jd-card__hd" style="padding:9px 10px">
+        <div class="jd-search" style="width:100%">
+          <svg><use href="/static/img/icons.svg#i-search"></use></svg>
+          <input class="jd-input" id="kw" placeholder="搜索会话 / 同事" style="height:30px">
+        </div>
+      </div>
+      <div id="opsChat"></div>
+      <div class="chat-side__list" id="sessList"></div>
+      <div style="padding:9px 12px;border-top:1px solid var(--border-light)" class="jd-hint">
+        技术支持信箱 <b id="supportAddr">support@jiudou.com</b>
+      </div>
+    </div>
+
+    <div class="jd-card chat-main" style="position:relative">
+      <div class="chat-head">
+        <span class="jd-avatar" style="background:var(--success)" id="peerAvatar">技</span>
+        <div style="min-width:0">
+          <div style="font-weight:600" id="peerName">{{ boot.botName }}</div>
+          <div class="jd-hint" id="peerState">平台技术支持 · 回复「人工」转接坐席</div>
+        </div>
+        <span class="jd-grow"></span>
+        <button class="jd-btn jd-btn--sm" id="btnHuman">转人工</button>
+      </div>
+
+      <div class="chat-msgs" id="msgs"></div>
+      <div class="chat-quick" id="quick"></div>
+      <div class="chat-rec" id="recBar">
+        <span class="jd-dot" style="background:var(--danger)"></span>
+        <span>正在录音</span>
+        <div class="chat-rec__bar"><i id="recProgress"></i></div>
+        <span id="recTime">00:00</span>
+        <button class="jd-btn jd-btn--sm" id="btnRecStop">停止并发送</button>
+      </div>
+      <div class="chat-tools">
+        <button class="chat-tool" id="btnEmoji" title="表情">{{ '' }}<svg><use href="/static/img/icons.svg#i-smile"></use></svg></button>
+        <button class="chat-tool" id="btnImage" title="图片"><svg><use href="/static/img/icons.svg#i-image"></use></svg></button>
+        <button class="chat-tool" id="btnFile" title="文件"><svg><use href="/static/img/icons.svg#i-clip"></use></svg></button>
+        <button class="chat-tool" id="btnVoice" title="语音"><svg><use href="/static/img/icons.svg#i-mic"></use></svg></button>
+        <button class="chat-tool" id="btnShot" title="截屏"><svg><use href="/static/img/icons.svg#i-camera"></use></svg></button>
+        <span class="jd-grow"></span>
+        <span class="jd-hint" id="typingHint"></span>
+      </div>
+      <div class="jd-emoji" id="emojiBox"></div>
+      <div class="chat-input" style="padding-top:0">
+        <textarea class="jd-textarea" id="input" rows="1"
+          placeholder="输入消息，Enter 发送，Shift+Enter 换行"></textarea>
+        <button class="jd-btn jd-btn--primary" id="btnSend" style="height:40px">
+          <svg><use href="/static/img/icons.svg#i-send"></use></svg>发送
+        </button>
+      </div>
+      <input type="file" id="filePick" style="display:none">
+      <input type="file" id="imagePick" accept="image/*" style="display:none">
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block init %}
+var curSid = '', curType = 'SUPPORT', timer = null, lastCount = 0, sessions = [], myId = JD.state.user.id;
+
+/* ---------------- 左侧：会话 ---------------- */
+var opsChat = JD.opsBar({
+  el: '#opsChat',
+  hint: '与同事一对一沟通，支持文件 / 图片 / 语音 / 截屏',
+  actions: [
+    { icon: 'users', text: '发起会话', type: 'primary', onClick: function () { pickContact(); } },
+    { icon: 'robot', text: '技术支持', onClick: function () { newSupport(); } },
+    { icon: 'refresh', text: '刷新', onClick: function () { loadSessions(); } }
+  ]
+});
+
+JD.get('/api/msg/support', null, { silent: true }).then(function (s) {
+  if (s && s.address) $('#supportAddr').text(s.address);
+});
+
+var QUICK = ['如何上传数据集？', '质量门禁未通过怎么办？', '为什么按钮点不了？', '如何找回密码？'];
+$('#quick').html(QUICK.map(function (q) { return '<span>' + q + '</span>'; }).join(''));
+$('#quick').on('click', 'span', function () { $('#input').val($(this).text()).focus(); });
+
+function loadSessions(cb) {
+  JD.get('/api/msg/chat/sessions').then(function (rows) {
+    sessions = rows || [];
+    var kw = $.trim($('#kw').val());
+    var show = sessions.filter(function (s) {
+      return !kw || (s.title || '').indexOf(kw) > -1 || (s.peer_name || '').indexOf(kw) > -1;
+    });
+    if (!show.length) {
+      $('#sessList').html('<div class="jd-empty" style="padding:24px 0;font-size:12px">暂无会话</div>');
+      if (cb) cb(null);
+      return;
+    }
+    $('#sessList').html(show.map(function (s) {
+      var icon = s.session_type === 'DIRECT' ? '👤 ' : '';
+      var lastTxt = s.last_content || '';
+      if (!lastTxt && s.last_type) {
+        lastTxt = { IMAGE: '[图片]', VOICE: '[语音]', FILE: '[文件]', SCREEN: '[截屏]' }[s.last_type] || '';
+      }
+      return '<div class="chat-item' + (s.id === curSid ? ' is-active' : '') +
+        '" data-id="' + s.id + '" data-type="' + s.session_type + '">' +
+        '<div class="chat-item__title">' + icon + JD.esc(s.title || '技术支持') +
+        (s.unread > 0 ? '<span class="chat-badge">' + (s.unread > 99 ? '99+' : s.unread) + '</span>' : '') +
+        '</div><div class="chat-item__last">' + JD.esc(lastTxt || '暂无消息') + '</div></div>';
+    }).join(''));
+    if (cb) cb(show[0]);
+  });
+}
+
+$('#sessList').on('click', '.chat-item', function () {
+  curSid = $(this).data('id');
+  curType = $(this).data('type');
+  $('.chat-item').removeClass('is-active');
+  $(this).addClass('is-active');
+  var s = sessions.filter(function (x) { return x.id === curSid; })[0] || {};
+  setHead(s);
+  loadMsgs(true);
+});
+$('#kw').on('input', function () { loadSessions(); });
+
+function setHead(s) {
+  if (s.session_type === 'DIRECT') {
+    var nm = s.peer_name || s.title || '同事';
+    $('#peerName').text(nm);
+    $('#peerAvatar').text(nm.slice(0, 1)).css('background', 'var(--primary)');
+    $('#peerState').text((s.peer_dept || '内部同事') + ' · 一对一沟通');
+    $('#btnHuman').hide();
+  } else {
+    $('#peerName').text(s.title || JD.state.boot.botName || '技术支持');
+    $('#peerAvatar').text((JD.state.boot.botName || '机').slice(-2, -1) || '机')
+      .css('background', 'var(--success)');
+    $('#peerState').text('平台技术支持 · 回复「人工」转接坐席');
+    $('#btnHuman').show();
+  }
+}
+
+/* ---------------- 通讯录 ---------------- */
+function pickContact() {
+  var body = '<div class="jd-search jd-mb8" style="width:100%">' +
+    '<svg><use href="/static/img/icons.svg#i-search"></use></svg>' +
+    '<input class="jd-input" id="ckw" placeholder="按姓名 / 部门 / 邮箱搜索同事"></div>' +
+    '<div id="contactBox" style="max-height:52vh;overflow:auto"></div>';
+  JD.dialog({
+    title: '发起会话 · 选择同事', width: 'jd-dialog', body: body,
+    footer: '<button class="jd-btn" data-act="close">关闭</button>',
+    onOpen: function ($m, close) {
+      $m.on('click', '[data-act="close"]', close);
+      function load() {
+        JD.get('/api/msg/chat/contacts', { keyword: $.trim($m.find('#ckw').val()) })
+          .then(function (rows) {
+            $m.find('#contactBox').html((rows || []).map(function (c) {
+              return '<div class="chat-contact" data-id="' + c.id + '">' +
+                '<div class="chat-contact__av">' + JD.esc((c.real_name || '?').slice(0, 1)) + '</div>' +
+                '<div style="flex:1;min-width:0"><div>' + JD.esc(c.real_name) + '</div>' +
+                '<div class="jd-hint">' + JD.esc(c.dept_name || '-') + ' · ' + JD.esc(c.email || '') + '</div></div>' +
+                '<svg style="color:var(--text-mute)"><use href="/static/img/icons.svg#i-chat"></use></svg></div>';
+            }).join('') || '<div class="jd-empty">没有匹配的同事</div>');
+          });
+      }
+      load();
+      $m.on('input', '#ckw', load);
+      $m.on('click', '.chat-contact', function () {
+        var pid = $(this).data('id');
+        close();
+        JD.post('/api/msg/chat/direct', { peerId: pid }).then(function (r) {
+          curSid = r.id;
+          loadSessions(function () {
+            curType = 'DIRECT';
+            $('.chat-item[data-id="' + curSid + '"]').addClass('is-active');
+            var s = sessions.filter(function (x) { return x.id === curSid; })[0] || {};
+            setHead(s);
+            loadMsgs(true);
+          });
+        });
+      });
+    }
+  });
+}
+
+function newSupport() {
+  JD.post('/api/msg/chat/new', {}).then(function (r) {
+    curSid = r.id; curType = 'SUPPORT';
+    loadSessions(function () { loadMsgs(true); });
+  });
+}
+
+/* ---------------- 消息渲染 ---------------- */
+function fmtDur(s) {
+  s = Number(s || 0);
+  return Math.floor(s / 60) + ':' + ('0' + (s % 60)).slice(-2);
+}
+
+function bubble(m) {
+  var me = m.sender_id === myId;
+  var name = m.sender_type === 'BOT' ? (JD.state.boot.botName || '技术支持')
+    : (m.sender_name || (me ? '我' : '同事'));
+  var content = '';
+  var kind = m.msg_type || 'TEXT';
+  if (kind === 'IMAGE' || kind === 'SCREEN') {
+    var url = '/api/msg/chat/attachment?id=' + m.attach_id;
+    content = '<img src="' + url + '" data-url="' + url + '" data-name="' +
+      JD.esc(m.file_name || '图片') + '" class="js-img">';
+  } else if (kind === 'VOICE') {
+    content = '<audio controls preload="none" src="/api/msg/chat/attachment?id=' +
+      m.attach_id + '"></audio><div class="chat-file__meta">语音 ' +
+      fmtDur(m.duration) + '</div>';
+  } else if (kind === 'FILE') {
+    content = '<a class="chat-file" href="/api/msg/chat/attachment?id=' + m.attach_id + '" download>' +
+      '<span class="chat-file__ico"><svg><use href="/static/img/icons.svg#i-file"></use></svg></span>' +
+      '<span style="min-width:0"><div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' +
+      JD.esc(m.file_name || '文件') + '</div>' +
+      '<div class="chat-file__meta">' + JD.fmtSize(m.size_bytes) + ' · 点击下载</div></span></a>';
+  } else {
+    content = JD.esc(m.content || '');
+  }
+  if (m.content && kind !== 'TEXT') content = '<div style="margin-top:6px">' + JD.esc(m.content) + '</div>' + content;
+  return '<div class="chat-msg ' + (me ? 'chat-msg--me' : 'chat-msg--bot') + '">' +
+    '<div class="chat-msg__avatar">' + JD.esc((name || '?').slice(0, 1)) + '</div>' +
+    '<div class="chat-msg__body"><div class="chat-msg__meta">' + JD.esc(name) + ' · ' +
+    JD.fmtTime(m.created_at).slice(5) + '</div>' +
+    '<div class="chat-bubble">' + content + '</div></div></div>';
+}
+
+function loadMsgs(force) {
+  if (!curSid) return;
+  JD.get('/api/msg/chat/messages', { sessionId: curSid }, { silent: true }).then(function (rows) {
+    if (!force && rows.length === lastCount) return;
+    lastCount = rows.length;
+    $('#msgs').html((rows || []).map(bubble).join('') ||
+      '<div class="jd-empty">还没有消息，发一条试试</div>');
+    $('#msgs').scrollTop($('#msgs')[0].scrollHeight);
+    if (force) loadSessions();
+  }).catch(function () { });
+}
+
+$('#msgs').on('click', '.js-img', function () {
+  JD.previewImage($(this).data('url'), $(this).data('name'));
+});
+
+/* ---------------- 发送 ---------------- */
+function send() {
+  var txt = $.trim($('#input').val());
+  if (!txt) return;
+  if (!curSid) { JD.alert('提示', '请先选择或新建会话', 'warning'); return; }
+  $('#input').val('').css('height', 'auto');
+  JD.post('/api/msg/chat/send', { sessionId: curSid, content: txt }).then(function (r) {
+    loadMsgs(true);
+    if (r && r.reply) setTimeout(function () { loadMsgs(true); }, 150);
+  });
+}
+$('#btnSend').on('click', send);
+$('#input').on('keydown', function (e) {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+});
+
+function uploadAndSend(file, kind, extra) {
+  if (!curSid) { JD.alert('提示', '请先选择会话', 'warning'); return; }
+  var maxMb = JD.state.boot.uploadMaxMb || 200;
+  if (file.size > maxMb * 1024 * 1024) {
+    JD.alert('文件过大', '文件 ' + JD.fmtSize(file.size) + ' 超过系统参数 ' + maxMb + ' MB', 'warning');
+    return;
+  }
+  var fd = new FormData();
+  fd.append('file', file);
+  fd.append('sessionId', curSid);
+  fd.append('kind', kind);
+  if (extra) Object.keys(extra).forEach(function (k) { fd.append(k, extra[k]); });
+  JD.loading(true, kind === 'VOICE' ? '正在发送语音…' : '正在上传…');
+  JD.upload('/api/msg/chat/upload', fd).then(function (a) {
+    return JD.post('/api/msg/chat/send', {
+      sessionId: curSid, msgType: kind, attachId: a.id,
+      content: $.trim($('#input').val())
+    }).then(function () { $('#input').val(''); });
+  }).then(function () {
+    JD.loading(false);
+    loadMsgs(true);
+  }).catch(function () { JD.loading(false); });
+}
+
+$('#btnImage').on('click', function () { $('#imagePick').val('').trigger('click'); });
+$('#imagePick').on('change', function () {
+  var f = this.files[0];
+  if (f) uploadAndSend(f, 'IMAGE');
+});
+$('#btnFile').on('click', function () { $('#filePick').val('').trigger('click'); });
+$('#filePick').on('change', function () {
+  var f = this.files[0];
+  if (f) uploadAndSend(f, 'FILE');
+});
+
+/* 表情 */
+var EMOJIS = ('😀 😃 😄 😁 😆 😅 🤣 😂 🙂 😉 😊 😍 🥰 😘 😜 🤪 🤔 🤨 😐 😑 😶 🙄 😏 ' +
+  '😣 😥 😮 🤐 😯 😴 😌 😛 😝 🤤 😒 😓 😔 😕 🙃 🤑 😲 🙁 😖 😞 😤 😢 😭 😦 😨 ' +
+  '😱 😬 😰 😅 🤗 🤭 🤫 🧐 😷 🤒 🤕 🤢 👍 👎 👌 ✌️ 🙏 💪 👏 🙌 🤝 ❤️ 💔 🔥 ⭐ ✅ ❌ ⚠️ 📌 💡 🎉 🚀')
+  .split(' ').filter(function (x) { return x; });
+$('#emojiBox').html(EMOJIS.map(function (e) { return '<span>' + e + '</span>'; }).join(''));
+$('#btnEmoji').on('click', function (e) {
+  e.stopPropagation();
+  $('#emojiBox').toggleClass('is-open');
+});
+$('#emojiBox').on('click', 'span', function (e) {
+  e.stopPropagation();
+  var $i = $('#input');
+  $i.val($i.val() + $(this).text()).focus();
+});
+$(document).on('click', function (e) {
+  if (!$(e.target).closest('#emojiBox,#btnEmoji').length) $('#emojiBox').removeClass('is-open');
+});
+
+/* 语音录制 */
+var recorder = null, chunks = [], recTimer = null, recStart = 0, recStream = null;
+$('#btnVoice').on('click', function () {
+  if (recorder) { stopRecord(); return; }
+  if (!navigator.mediaDevices || !window.MediaRecorder) {
+    JD.alert('当前浏览器不支持录音', '请使用 Chrome / Edge 最新版本，或改用「文件」发送音频。', 'warning');
+    return;
+  }
+  navigator.mediaDevices.getUserMedia({ audio: true }).then(function (stream) {
+    recStream = stream;
+    chunks = [];
+    recorder = new MediaRecorder(stream);
+    recorder.ondataavailable = function (ev) { if (ev.data.size) chunks.push(ev.data); };
+    recorder.onstop = function () {
+      var dur = Math.max(1, Math.round((Date.now() - recStart) / 1000));
+      var type = (chunks[0] && chunks[0].type) || 'audio/webm';
+      var blob = new Blob(chunks, { type: type });
+      var file = new File([blob], 'voice-' + Date.now() + '.webm', { type: type });
+      uploadAndSend(file, 'VOICE', { duration: dur });
+    };
+    recorder.start();
+    recStart = Date.now();
+    $('#btnVoice').addClass('is-recording');
+    $('#recBar').addClass('is-on');
+    $('#recTime').text('00:00');
+    recTimer = setInterval(function () {
+      var s = Math.round((Date.now() - recStart) / 1000);
+      $('#recTime').text('0' + Math.floor(s / 60) + ':' + ('0' + (s % 60)).slice(-2));
+      $('#recProgress').css('width', Math.min(100, s / 60 * 100) + '%');
+      if (s >= 60) stopRecord();
+    }, 300);
+  }).catch(function () {
+    JD.alert('无法访问麦克风', '请在浏览器地址栏允许麦克风权限后重试。', 'warning');
+  });
+});
+
+function stopRecord() {
+  if (recTimer) { clearInterval(recTimer); recTimer = null; }
+  $('#btnVoice').removeClass('is-recording');
+  $('#recBar').removeClass('is-on');
+  $('#recProgress').css('width', 0);
+  if (recorder && recorder.state !== 'inactive') recorder.stop();
+  recorder = null;
+  if (recStream) { recStream.getTracks().forEach(function (t) { t.stop(); }); recStream = null; }
+}
+$('#btnRecStop').on('click', stopRecord);
+
+/* 截屏（屏幕共享抓一帧） */
+$('#btnShot').on('click', function () {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
+    JD.alert('当前浏览器不支持截屏', '请使用 Chrome / Edge，或先用系统截图再以「图片」发送。', 'warning');
+    return;
+  }
+  navigator.mediaDevices.getDisplayMedia({ video: true }).then(function (stream) {
+    var track = stream.getVideoTracks()[0];
+    var v = document.createElement('video');
+    v.srcObject = stream;
+    v.onloadedmetadata = function () {
+      v.play();
+      setTimeout(function () {
+        var cv = document.createElement('canvas');
+        cv.width = v.videoWidth; cv.height = v.videoHeight;
+        cv.getContext('2d').drawImage(v, 0, 0, cv.width, cv.height);
+        track.stop();
+        cv.toBlob(function (blob) {
+          if (!blob) { JD.alert('截屏失败', '未能捕获画面，请重试', 'warning'); return; }
+          var f = new File([blob], 'screenshot-' + Date.now() + '.png', { type: 'image/png' });
+          uploadAndSend(f, 'SCREEN', { width: cv.width, height: cv.height });
+        }, 'image/png');
+      }, 380);
+    };
+  }).catch(function () { /* 用户取消选择屏幕，无需提示 */ });
+});
+
+$('#btnHuman').on('click', function () {
+  if (!curSid) return;
+  $('#input').val('人工');
+  send();
+});
+
+/* ---------------- 轮询 ---------------- */
+loadSessions(function (first) {
+  if (first) {
+    curSid = first.id; curType = first.session_type;
+    $('.chat-item[data-id="' + first.id + '"]').addClass('is-active');
+    setHead(first);
+    loadMsgs(true);
+  }
+  timer = setInterval(function () {
+    loadMsgs(false);
+    loadSessions();
+  }, 4000);
+});
+{% endblock %}

@@ -1,0 +1,179 @@
+{% extends "layout.html" %}
+{% block title %}业务字典 · 九豆高质量数据资产平台{% endblock %}
+{% block body %}
+<div class="jd-page">
+  <div class="jd-crumb">系统管理 <span>/</span> <b>业务字典</b></div>
+
+  <div style="display:grid;grid-template-columns:330px 1fr;gap:12px;align-items:start">
+    <div class="jd-card">
+      <div class="jd-card__hd">
+        <h3>字典类型</h3>
+        <span class="jd-hint" id="typeCount"></span>
+      </div>
+      <div id="opsType"></div>
+      <div class="jd-card__bd jd-card__bd--flush" id="typeList"></div>
+    </div>
+
+    <div class="jd-card">
+      <div class="jd-card__hd">
+        <h3 id="itemTitle">字典项</h3>
+        <span class="jd-hint" id="itemHint">请选择左侧字典类型</span>
+      </div>
+      <div id="opsItem"></div>
+      <div class="jd-card__bd" id="itemBox"><div class="jd-empty">请选择左侧字典类型</div></div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block init %}
+var types = [], cur = null, curItems = [], curType = null;
+
+var opsType = JD.opsBar({
+  el: '#opsType',
+  hint: '选中字典类型后可编辑 / 删除',
+  actions: [
+    { icon: 'plus', text: '新增类型', type: 'primary', perm: 'sys:dict:create', onClick: function () { openType(null); } },
+    { icon: 'edit', text: '编辑', needRow: true, perm: 'sys:dict:create', onClick: function (t) { openType(t); } },
+    { icon: 'trash', text: '删除', type: 'danger', needRow: true, perm: 'sys:dict:delete', onClick: function (t) { removeType(t); } }
+  ]
+});
+
+var opsItem = JD.opsBar({
+  el: '#opsItem',
+  hint: '选中字典项后可编辑 / 删除；被业务引用的字典项禁止删除',
+  actions: [
+    { icon: 'plus', text: '新增字典项', type: 'primary', perm: 'sys:dict:item', onClick: function () { openItem(null); } },
+    { icon: 'edit', text: '编辑', needRow: true, perm: 'sys:dict:item', onClick: function (r) { openItem(r); } },
+    { icon: 'trash', text: '删除', type: 'danger', needRow: true, perm: 'sys:dict:item', onClick: function (r) { removeItem(r); } }
+  ]
+});
+
+function loadTypes(selectCode) {
+  JD.get('/api/system/dict/types').then(function (rows) {
+    types = rows || [];
+    $('#typeCount').text('共 ' + types.length + ' 类');
+    $('#typeList').html(types.map(function (t) {
+      var on = cur && cur.type_code === t.type_code;
+      return '<div class="js-type' + (on ? ' is-active' : '') + '" data-code="' + JD.esc(t.type_code) + '"' +
+        ' style="padding:10px 14px;border-bottom:1px solid var(--border-light);cursor:pointer;display:flex;align-items:center;gap:8px' +
+        (on ? ';background:var(--primary-weak)' : '') + '">' +
+        '<div style="flex:1"><div style="font-weight:600">' + JD.esc(t.type_name) + '</div>' +
+        '<div class="jd-hint">' + JD.esc(t.type_code) + '</div></div>' +
+        '<span class="jd-tag">' + t.item_count + '</span></div>';
+    }).join('') || '<div class="jd-empty">暂无字典</div>');
+    opsType.clear();
+    var target = selectCode ? types.filter(function (t) { return t.type_code === selectCode; })[0]
+      : (cur || types[0]);
+    if (target) loadItems(target);
+  });
+}
+
+function loadItems(t) {
+  cur = t;
+  $('#typeList .js-type').each(function () {
+    var on = $(this).data('code') === t.type_code;
+    $(this).toggleClass('is-active', on).css('background', on ? 'var(--primary-weak)' : '');
+  });
+  $('#itemTitle').text('字典项 · ' + t.type_name);
+  $('#itemHint').html('<span class="jd-code">' + JD.esc(t.type_code) + '</span>');
+  JD.get('/api/system/dict/items', { typeCode: t.type_code }).then(function (rows) {
+    curItems = rows || [];
+    opsItem.clear();
+    if (!curItems.length) { $('#itemBox').html('<div class="jd-empty">该字典暂无字典项</div>'); return; }
+    $('#itemBox').html('<div class="jd-table-wrap"><table class="jd-table"><thead><tr><th>值</th><th>显示名</th>' +
+      '<th class="num">排序</th><th>状态</th></tr></thead><tbody>' + curItems.map(function (r) {
+        return '<tr data-id="' + r.id + '"><td><span class="jd-code">' + JD.esc(r.item_value) + '</span></td>' +
+          '<td><b>' + JD.esc(r.item_label) + '</b></td>' +
+          '<td class="num">' + r.sort_no + '</td>' +
+          '<td>' + (r.status === 1 ? '<span class="jd-tag jd-tag--success">启用</span>' : '<span class="jd-tag">停用</span>') + '</td></tr>';
+      }).join('') + '</tbody></table></div>');
+  });
+}
+
+$('#typeList').on('click', '.js-type', function () {
+  var code = $(this).data('code');
+  loadItems(types.filter(function (t) { return t.type_code === code; })[0]);
+});
+
+$('#itemBox').on('click', 'tbody tr', function () {
+  var id = $(this).attr('data-id');
+  var row = curItems.filter(function (x) { return x.id === id; })[0];
+  if (!row) return;
+  if (curType && curType.id === id) { curType = null; $(this).removeClass('is-selected'); opsItem.clear(); return; }
+  curType = row;
+  row.__label = row.item_label;
+  $('#itemBox tbody tr').removeClass('is-selected');
+  $(this).addClass('is-selected');
+  opsItem.select(row);
+});
+
+function openType(t) {
+  JD.formDialog({
+    title: t ? '编辑字典类型' : '新增字典类型', width: 'jd-dialog',
+    fields: [
+      { name: 'type_code', label: '字典编码', required: true, placeholder: '如 sys_marriage',
+        hint: '编码建议稳定不变，业务代码按编码取值' },
+      { name: 'type_name', label: '字典名称', required: true },
+      { name: 'remark', label: '说明', type: 'textarea', span: 2, rows: 2 },
+      { name: 'status', label: '启用', type: 'switch', span: 2 }
+    ],
+    data: t || { status: 1 },
+    onSubmit: function (v) {
+      if (t) v.id = t.id;
+      return JD.post('/api/system/dict/save', v).then(function () {
+        loadTypes(v.type_code);
+        return true;
+      });
+    }
+  });
+}
+
+function removeType(t) {
+  JD.confirm('删除字典类型', '将同时删除「' + t.type_name + '」下的全部字典项；若已被业务功能引用，系统会拒绝删除。',
+    { danger: true, okText: '删除' }).then(function (yes) {
+    if (!yes) return;
+    JD.post('/api/system/dict/delete', { id: t.id }).then(function () {
+      JD.alert('已删除', '字典类型已删除', 'success');
+      cur = null;
+      loadTypes();
+    });
+  });
+}
+
+function openItem(r) {
+  if (!cur) { JD.alert('提示', '请先选择字典类型', 'warning'); return; }
+  JD.formDialog({
+    title: r ? '编辑字典项' : '新增字典项 · ' + cur.type_name, width: 'jd-dialog',
+    fields: [
+      { name: 'item_value', label: '字典值', required: true, hint: '存库值，建议短编码' },
+      { name: 'item_label', label: '显示名', required: true },
+      { name: 'sort_no', label: '排序', type: 'number', value: 10 },
+      { name: 'status', label: '启用', type: 'switch', value: 1 },
+      { name: 'ext_json', label: '扩展信息(JSON)', span: 2, placeholder: '可留空' }
+    ],
+    data: r || { status: 1, sort_no: 10 },
+    onSubmit: function (v) {
+      v.type_code = cur.type_code;
+      if (r) v.id = r.id;
+      return JD.post('/api/system/dict/item/save', v).then(function () {
+        loadTypes(cur.type_code);
+        return true;
+      });
+    }
+  });
+}
+
+function removeItem(r) {
+  JD.confirm('删除字典项', '若「' + r.item_label + '」已被业务数据引用，系统将拒绝删除（可改为停用）。',
+    { danger: true, okText: '删除' }).then(function (yes) {
+    if (!yes) return;
+    JD.post('/api/system/dict/item/delete', { id: r.id }).then(function () {
+      JD.alert('已删除', '字典项已删除', 'success');
+      loadTypes(cur.type_code);
+    });
+  });
+}
+
+loadTypes();
+{% endblock %}

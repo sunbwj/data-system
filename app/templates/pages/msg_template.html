@@ -1,0 +1,154 @@
+{% extends "layout.html" %}
+{% block title %}消息模板 · 九豆高质量数据资产平台{% endblock %}
+{% block body %}
+<div class="jd-page">
+  <div class="jd-crumb">消息中心 <span>/</span> <b>消息模板</b></div>
+
+  <div class="jd-notice jd-mb12">
+    模板按 <b>事件 × 通道</b> 维护，变量使用 <span class="jd-code">{{ '{{name}}' }}</span> 形式。
+    可用变量：name、username、password、dataset、version、score、conclusion、count、link、expire。
+  </div>
+
+  <div class="jd-toolbar">
+    <div class="jd-search">
+      <svg><use href="/static/img/icons.svg#i-search"></use></svg>
+      <input class="jd-input" id="kw" placeholder="模板名称 / 编码 / 事件">
+    </div>
+    <select class="jd-select" id="fCh" style="width:150px">
+      <option value="">全部通道</option>
+      <option value="INAPP">站内信</option>
+      <option value="EMAIL">邮件</option>
+      <option value="IM">即时消息</option>
+    </select>
+    <button class="jd-btn jd-btn--primary" id="btnSearch">查询</button>
+    <button class="jd-btn" id="btnReset">重置</button>
+  </div>
+
+  <div class="jd-card jd-card__bd--flush">
+    <div id="ops"></div>
+    <div id="tbl"></div>
+  </div>
+</div>
+{% endblock %}
+
+{% block init %}
+var rowsCache = [], viewRows = [], sel = null;
+
+var ops = JD.opsBar({
+  el: '#ops',
+  hint: '选中模板后可编辑 / 测试发送 / 删除；测试消息投递到「我的消息」',
+  actions: [
+    { icon: 'edit', text: '编辑', needRow: true, perm: 'msg:template:edit',
+      onClick: function (r) { openEdit(r); } },
+    { icon: 'send', text: '测试发送', needRow: true, perm: 'msg:template:test',
+      onClick: function (r) { testSend(r); } },
+    { icon: 'trash', text: '删除', type: 'danger', needRow: true, perm: 'msg:template:delete',
+      onClick: function (r) { removeTpl(r); } },
+    { icon: 'refresh', text: '刷新', onClick: function () { reload(); } }
+  ]
+});
+
+function reload() {
+  JD.get('/api/msg/template/list').then(function (rows) {
+    rowsCache = rows || [];
+    filter();
+  });
+}
+
+function filter() {
+  var ch = $('#fCh').val(), kw = $.trim($('#kw').val());
+  viewRows = rowsCache.filter(function (r) {
+    if (ch && r.channel !== ch) return false;
+    if (!kw) return true;
+    return (r.tpl_name || '').indexOf(kw) > -1 || (r.tpl_code || '').indexOf(kw) > -1 ||
+      (r.event_type || '').indexOf(kw) > -1;
+  });
+  render(viewRows);
+}
+
+function render(rows) {
+  var body = rows.map(function (r) {
+    var chTag = r.channel === 'EMAIL' ? 'primary' : (r.channel === 'IM' ? 'success' : 'info');
+    var chName = { EMAIL: '邮件', INAPP: '站内信', IM: '即时消息' }[r.channel] || r.channel;
+    return '<tr data-id="' + r.id + '"><td><b>' + JD.esc(r.tpl_name) + '</b>' +
+      '<div class="jd-hint">' + JD.esc(r.tpl_code) + ' · ' + JD.esc(r.event_type) + '</div></td>' +
+      '<td><span class="jd-tag jd-tag--' + chTag + '">' + chName + '</span></td>' +
+      '<td style="max-width:280px">' + JD.esc(r.title_tpl || '') + '</td>' +
+      '<td style="max-width:360px"><span class="jd-hint">' +
+      JD.esc((r.content_tpl || '').replace(/\n/g, ' ').slice(0, 80)) + '…</span></td>' +
+      '<td>' + (r.status === 1 ? '<span class="jd-tag jd-tag--success">启用</span>' : '<span class="jd-tag">停用</span>') + '</td></tr>';
+  }).join('');
+  $('#tbl').html('<div class="jd-table-wrap"><table class="jd-table"><thead><tr><th>模板</th><th>通道</th>' +
+    '<th>标题模板</th><th>正文模板</th><th>状态</th></tr></thead><tbody>' +
+    (body || '<tr><td colspan="5"><div class="jd-empty">暂无模板</div></td></tr>') + '</tbody></table></div>');
+  sel = null; ops.clear();
+}
+
+$('#tbl').on('click', 'tbody tr', function () {
+  var id = $(this).attr('data-id');
+  if (!id) return;
+  if (sel && sel.id === id) { sel = null; $(this).removeClass('is-selected'); ops.clear(); return; }
+  var row = viewRows.filter(function (x) { return x.id === id; })[0];
+  if (!row) return;
+  row.__label = row.tpl_name;
+  sel = row;
+  $('#tbl tbody tr').removeClass('is-selected');
+  $(this).addClass('is-selected');
+  ops.select(row);
+});
+
+$('#btnSearch').on('click', filter);
+$('#btnReset').on('click', function () { $('#kw').val(''); $('#fCh').val(''); filter(); });
+$('#kw').on('keydown', function (e) { if (e.key === 'Enter') filter(); });
+
+function openEdit(r) {
+  JD.formDialog({
+    title: '编辑消息模板', width: 'jd-dialog--lg',
+    fields: [
+      { name: 'tpl_code', label: '模板编码', required: true, readonly: true },
+      { name: 'tpl_name', label: '模板名称', required: true },
+      { name: 'event_type', label: '事件类型', required: true, readonly: true },
+      { name: 'channel', label: '通道', type: 'select', required: true,
+        options: [{ value: 'INAPP', label: '站内信' }, { value: 'EMAIL', label: '邮件' }, { value: 'IM', label: '即时消息' }] },
+      { name: 'title_tpl', label: '标题模板', span: 2 },
+      { name: 'content_tpl', label: '正文模板', type: 'textarea', span: 2, rows: 8 },
+      { name: 'status', label: '启用', type: 'switch', span: 2 }
+    ],
+    data: r,
+    onSubmit: function (v) {
+      v.id = r.id;
+      return JD.post('/api/msg/template/save', v).then(function () {
+        JD.alert('已保存', '模板已更新，新消息立即生效', 'success');
+        reload();
+        return true;
+      });
+    }
+  });
+}
+
+function testSend(r) {
+  JD.post('/api/msg/template/test', { id: r.id }).then(function (x) {
+    JD.dialog({
+      title: '测试消息已发送到「我的消息」', width: 'jd-dialog--lg',
+      body: '<div class="jd-hint jd-mb8">标题</div><div class="jd-code" style="display:block;margin-bottom:12px">' +
+        JD.esc(x.title || '-') + '</div><div class="jd-hint jd-mb8">正文</div>' +
+        '<div style="white-space:pre-wrap;line-height:1.8;border:1px solid var(--border-light);border-radius:8px;padding:12px">' +
+        JD.esc(x.content || '') + '</div>',
+      footer: '<button class="jd-btn" data-act="close">关闭</button>',
+      onOpen: function ($m, close) { $m.on('click', '[data-act="close"]', close); }
+    });
+  });
+}
+
+function removeTpl(r) {
+  JD.confirm('删除模板', '删除「' + r.tpl_name + '」后对应事件将退回默认文案，确定删除？',
+    { danger: true, okText: '删除' }).then(function (yes) {
+    if (!yes) return;
+    JD.post('/api/msg/template/delete', { id: r.id }).then(function () {
+      reload();
+    });
+  });
+}
+
+reload();
+{% endblock %}

@@ -1,0 +1,29 @@
+# ---- 本机私密配置：数据库口令 / 会话密钥 ----
+app/local_settings.py
+
+# ---- 证书与私钥：含内网 IP、主机名，且私钥绝不能进版本库 ----
+# 需要时运行 python scripts/gen_cert.py 重新生成
+certs/
+
+# ---- 运行期产物 ----
+*.log
+server.log
+scripts/.*.log
+storage/
+.tmp/
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# ---- 工作台本地数据（含本机路径、账号备忘，不随代码分发） ----
+.workbuddy/
+
+# ---- 编辑器 / 系统 ----
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

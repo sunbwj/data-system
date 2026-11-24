@@ -1,0 +1,160 @@
+{% extends "layout.html" %}
+{% block title %}用户管理 · 九豆高质量数据资产平台{% endblock %}
+{% block body %}
+<div class="jd-page">
+  <div class="jd-crumb">系统管理 <span>/</span> <b>用户管理</b></div>
+
+  <div class="jd-toolbar">
+    <div class="jd-search">
+      <svg><use href="/static/img/icons.svg#i-search"></use></svg>
+      <input class="jd-input" id="kw" placeholder="账号 / 姓名 / 邮箱">
+    </div>
+    <select class="jd-select" id="fStatus" style="width:120px">
+      <option value="">全部状态</option>
+      <option value="1">启用</option>
+      <option value="0">停用</option>
+    </select>
+    <button class="jd-btn jd-btn--primary" id="btnSearch">查询</button>
+    <button class="jd-btn" id="btnReset">重置</button>
+  </div>
+
+  <div class="jd-notice jd-mb12">
+    初始密码统一为 <b>888888</b>，账号首次登录后将被强制修改；连续输错密码达阈值会锁定 10 分钟。
+  </div>
+
+  <div class="jd-card jd-card__bd--flush" id="tbl"></div>
+</div>
+{% endblock %}
+
+{% block init %}
+var tbl, allRoles = [], cache = {};
+
+JD.get('/api/system/role/all').then(function (rs) { allRoles = rs || []; });
+
+tbl = JD.table({
+  el: '#tbl', url: '/api/system/user/list', pageSize: 15,
+  columns: [
+    { field: 'username', title: '登录账号', render: function (v, r) {
+      return '<b>' + JD.esc(v) + '</b><div class="jd-hint">' + JD.esc(r.real_name) + ' · ' +
+        JD.esc(r.email) + '</div>';
+    }},
+    { field: 'role_names', title: '角色', render: function (v) {
+      return v ? v.split(',').map(function (x) { return '<span class="jd-tag jd-tag--primary">' + JD.esc(x) + '</span>'; }).join(' ')
+        : '<span class="jd-hint">未分配</span>';
+    }},
+    { field: 'last_login_at', title: '最近登录', width: 140, render: function (v, r) {
+      return '<span class="jd-hint">' + (v ? JD.fmtTime(v) : '从未登录') + '</span>' +
+        (r.last_login_ip ? '<div class="jd-hint">' + JD.esc(r.last_login_ip) + '</div>' : '');
+    }},
+    { field: 'must_change_pwd', title: '密码状态', width: 110, render: function (v) {
+      return v === 1 ? '<span class="jd-tag jd-tag--warning">待修改</span>'
+        : '<span class="jd-tag jd-tag--success">已设置</span>';
+    }},
+    { field: 'status', title: '状态', width: 80, render: function (v) {
+      return v === 1 ? '<span class="jd-tag jd-tag--success">启用</span>' : '<span class="jd-tag">停用</span>';
+    }},
+  ],
+  ops: [
+    { icon: 'plus', text: '新增用户', type: 'primary', perm: 'sys:user:create',
+      onClick: function () { openCreate(); } },
+    { icon: 'users', text: '设置角色', needRow: true, perm: 'sys:user:role',
+      onClick: function (r) { setRoles(r); } },
+    { icon: 'lock', text: '重置密码', needRow: true, perm: 'sys:user:reset',
+      onClick: function (r) { resetPwd(r); } },
+    { icon: 'trash', text: '删除', type: 'danger', needRow: true, perm: 'sys:user:delete',
+      onClick: function (r) { removeUser(r); } },
+    { icon: 'refresh', text: '刷新', onClick: function () { tbl.clearSelected(); tbl.reload(); } }
+  ],
+  hint: '初始密码 888888，首次登录强制修改；选中一行后可设置角色 / 重置密码',
+  onLoaded: function (d) {
+    cache = {};
+    (d.rows || []).forEach(function (r) { cache[r.id] = r; });
+    JD.bindPerms($('#tbl'));
+  }
+});
+
+function query() { tbl.setParams({ keyword: $.trim($('#kw').val()), status: $('#fStatus').val() }); }
+$('#btnSearch').on('click', query);
+$('#btnReset').on('click', function () { $('#kw').val(''); $('#fStatus').val(''); query(); });
+$('#kw').on('keydown', function (e) { if (e.key === 'Enter') query(); });
+
+function openCreate() {
+  JD.get('/api/system/employee/options').then(function (emps) {
+    JD.formDialog({
+      title: '新增用户', width: 'jd-dialog',
+      fields: [
+        { name: 'employee_id', label: '关联员工', type: 'select', required: true, span: 2,
+          options: emps.map(function (e) { return { value: e.id, label: e.real_name + '（' + e.email + '）' }; }) },
+        { name: 'username', label: '登录账号', required: true, span: 2,
+          placeholder: '建议使用姓名拼音，全局唯一' },
+        { name: 'roleIds', label: '初始角色', type: 'select', span: 2,
+          options: [{ value: '', label: '稍后设置' }].concat(allRoles.map(function (r) {
+            return { value: r.id, label: r.role_name };
+          })) }
+      ],
+      onSubmit: function (v) {
+        return JD.post('/api/system/user/save', {
+          employee_id: v.employee_id, username: v.username,
+          roleIds: v.roleIds ? [v.roleIds] : []
+        }).then(function () {
+          JD.alert('创建成功', '账号已创建，初始密码 888888，并已发送站内信与开通邮件通知。', 'success');
+          tbl.reload(true);
+          return true;
+        });
+      }
+    });
+  });
+}
+
+function setRoles(u) {
+  var uid = u.id;
+  JD.get('/api/system/user/roles', { userId: uid }).then(function (mine) {
+    var html = allRoles.map(function (r) {
+      return '<label class="jd-check" style="display:block;padding:7px 0">' +
+        '<input type="checkbox" value="' + r.id + '"' + (mine.indexOf(r.id) > -1 ? ' checked' : '') + '>' +
+        '<span>' + JD.esc(r.role_name) + ' <span class="jd-hint">' + JD.esc(r.role_code) + '</span></span></label>';
+    }).join('');
+    JD.dialog({
+      title: '设置角色 · ' + (u.real_name || ''), width: 'jd-dialog',
+      body: '<div class="jd-hint jd-mb8">角色决定菜单与按钮权限；数据可见范围由主角色决定。</div>' + html,
+      footer: '<button class="jd-btn" data-act="cancel">取消</button>' +
+        '<button class="jd-btn jd-btn--primary" data-act="ok">保存</button>',
+      onOpen: function ($m, close) {
+        $m.on('click', '[data-act="cancel"]', close);
+        $m.on('click', '[data-act="ok"]', function () {
+          var ids = $m.find('input:checked').map(function () { return this.value; }).get();
+          JD.post('/api/system/user/set-roles', { userId: uid, roleIds: ids }).then(function () {
+            close();
+            JD.alert('已保存', '角色已更新，该用户下次请求即生效', 'success');
+            tbl.reload();
+          });
+        });
+      }
+    });
+  });
+}
+
+function resetPwd(u) {
+  var uid = u.id;
+  JD.confirm('重置密码', '重置为初始密码 888888，并强制下次登录修改，当前会话将被注销。',
+    { okText: '重置' }).then(function (yes) {
+    if (!yes) return;
+    JD.post('/api/system/user/reset-pwd', { id: uid }).then(function () {
+      JD.alert('已重置', '初始密码 888888', 'success');
+      tbl.reload();
+    });
+  });
+}
+
+function removeUser(u) {
+  var uid = u.id;
+  JD.confirm('删除用户', '将删除登录账号及其角色绑定（员工档案保留），操作不可恢复。',
+    { danger: true, okText: '删除' }).then(function (yes) {
+    if (!yes) return;
+    JD.post('/api/system/user/delete', { id: uid }).then(function () {
+      JD.alert('已删除', '账号已删除', 'success');
+      tbl.clearSelected(); tbl.reload();
+    });
+  });
+}
+{% endblock %}

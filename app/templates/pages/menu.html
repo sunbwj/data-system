@@ -1,0 +1,167 @@
+{% extends "layout.html" %}
+{% block title %}菜单项管理 · 九豆高质量数据资产平台{% endblock %}
+{% block body %}
+<div class="jd-page">
+  <div class="jd-crumb">系统管理 <span>/</span> <b>菜单项管理</b></div>
+
+  <div class="jd-toolbar">
+    <div class="jd-search">
+      <svg><use href="/static/img/icons.svg#i-search"></use></svg>
+      <input class="jd-input" id="kw" placeholder="节点名称 / 权限点 / 路由">
+    </div>
+    <button class="jd-btn jd-btn--primary" id="btnSearch">查询</button>
+    <button class="jd-btn" id="btnReset">重置</button>
+    <span class="jd-hint">统一权限树：目录 / 页面 / 按钮 / 外链，按钮即权限点</span>
+  </div>
+
+  <div class="jd-card jd-card__bd--flush">
+    <div id="ops"></div>
+    <div id="tree"></div>
+  </div>
+</div>
+{% endblock %}
+
+{% block init %}
+var flat = [], typeName = { DIR: ['目录', 'info'], MENU: ['页面', 'primary'], BUTTON: ['按钮', 'warning'], LINK: ['外链', 'success'] };
+
+function flatten(nodes, depth) {
+  var out = [];
+  (nodes || []).forEach(function (n) {
+    n.__depth = depth;
+    out.push(n);
+    out = out.concat(flatten(n.children || [], depth + 1));
+  });
+  return out;
+}
+
+function load() {
+  JD.get('/api/system/menu/tree').then(function (nodes) {
+    window.__tree = nodes;
+    flat = flatten(nodes, 0);
+    var rows = flat.map(function (n) {
+      var t = typeName[n.menu_type] || ['未知', 'info'];
+      return '<tr data-id="' + n.id + '"><td><span style="display:inline-block;width:' + (n.__depth * 18) +
+        'px"></span>' + (n.__depth ? '<span class="jd-hint">└ </span>' : '') +
+        JD.icon(n.icon || 'file', 'jd-micon') + ' <b>' + JD.esc(n.menu_name) + '</b></td>' +
+        '<td><span class="jd-tag jd-tag--' + t[1] + '">' + t[0] + '</span></td>' +
+        '<td>' + (n.perm_code ? '<span class="jd-code">' + JD.esc(n.perm_code) + '</span>' : '<span class="jd-hint">-</span>') + '</td>' +
+        '<td class="jd-hint">' + JD.esc(n.route || '-') + '</td>' +
+        '<td class="num">' + n.sort_no + '</td>' +
+        '<td>' + (n.status === 1 ? '<span class="jd-tag jd-tag--success">启用</span>'
+          : '<span class="jd-tag">停用</span>') + '</td></tr>';
+    }).join('');
+    $('#tree').html('<div class="jd-table-wrap"><table class="jd-table"><thead><tr><th>节点</th><th>类型</th>' +
+      '<th>权限点</th><th>路由 / 地址</th><th class="num">排序</th><th>状态</th></tr></thead><tbody>' +
+      (rows || '<tr><td colspan="6"><div class="jd-empty">暂无菜单项</div></td></tr>') + '</tbody></table></div>');
+    if (ops) ops.clear();
+  });
+}
+
+var ops = JD.opsBar({
+  el: '#ops',
+  hint: '选中节点后可加子项 / 编辑 / 删除；按钮节点的权限点即接口校验依据',
+  actions: [
+    { icon: 'plus', text: '新增顶级节点', type: 'primary', perm: 'sys:menu:create',
+      onClick: function () { openForm(null, '0'); } },
+    { icon: 'folder-plus', text: '加子项', needRow: true, perm: 'sys:menu:create',
+      onClick: function (r) { openForm(null, r.id); } },
+    { icon: 'edit', text: '编辑', needRow: true, perm: 'sys:menu:edit',
+      onClick: function (r) { openForm(r); } },
+    { icon: 'trash', text: '删除', type: 'danger', needRow: true, perm: 'sys:menu:delete',
+      onClick: function (r) { removeMenu(r); } },
+    { icon: 'refresh', text: '刷新', onClick: function () { ops.clear(); load(); } }
+  ]
+});
+
+$('#tree').on('click', 'tbody tr', function () {
+  var id = $(this).data('id');
+  if (!id) return;
+  if (ops.get() && ops.get().id === id) { ops.clear(); $(this).removeClass('is-selected'); return; }
+  var row = flat.filter(function (x) { return x.id === id; })[0];
+  if (!row) return;
+  row.__label = row.menu_name;
+  $('#tree tbody tr').removeClass('is-selected');
+  $(this).addClass('is-selected');
+  ops.select(row);
+});
+$('#tree').on('dblclick', 'tbody tr', function () {
+  var row = flat.filter(function (x) { return x.id === $(this).data('id'); })[0];
+  if (row && JD.hasPerm('sys:menu:edit')) openForm(row);
+});
+
+function removeMenu(row) {
+  JD.confirm('删除菜单项', '删除「' + row.menu_name + '」会同时移除所有角色对该节点的授权，且存在下级时不允许删除。',
+    { danger: true, okText: '删除' }).then(function (yes) {
+    if (!yes) return;
+    JD.post('/api/system/menu/delete', { id: row.id }).then(function () {
+      JD.alert('已删除', '菜单项及授权关系已删除', 'success');
+      load();
+    });
+  });
+}
+
+function query() {
+  var kw = $.trim($('#kw').val());
+  if (kw) { $('#tree tbody tr').hide(); } else { $('#tree tbody tr').show(); return; }
+  flat.forEach(function (n) {
+    var hit = (n.menu_name || '').indexOf(kw) > -1 || (n.perm_code || '').indexOf(kw) > -1 ||
+      (n.route || '').indexOf(kw) > -1;
+    if (hit) $('#tree tbody tr[data-id="' + n.id + '"]').show();
+  });
+}
+$('#btnSearch').on('click', query);
+$('#btnReset').on('click', function () { $('#kw').val(''); $('#tree tbody tr').show(); });
+$('#kw').on('keydown', function (e) { if (e.key === 'Enter') query(); });
+
+load();
+
+function optionsFor(nodes, depth, arr) {
+  arr = arr || [];
+  (nodes || []).forEach(function (n) {
+    if (n.menu_type !== 'BUTTON') {
+      arr.push({ value: n.id, label: new Array(depth + 1).join('　') + n.menu_name + '（' + n.menu_type + '）' });
+      optionsFor(n.children, depth + 1, arr);
+    }
+  });
+  return arr;
+}
+
+function openForm(row, parentId) {
+  JD.get('/api/system/menu/tree').then(function (tree) {
+    var opts = [{ value: '0', label: '（顶级节点）' }].concat(optionsFor(tree, 0));
+    JD.formDialog({
+      title: row ? '编辑菜单项' : '新增菜单项', width: 'jd-dialog--lg',
+      fields: [
+        { name: 'parent_id', label: '上级节点', type: 'select', required: true, options: opts,
+          value: parentId || '0' },
+        { name: 'menu_type', label: '节点类型', type: 'select', required: true,
+          options: [{ value: 'DIR', label: '目录' }, { value: 'MENU', label: '页面' },
+            { value: 'BUTTON', label: '按钮（权限点）' }, { value: 'LINK', label: '外链' }], value: 'MENU' },
+        { name: 'menu_name', label: '名称', required: true },
+        { name: 'perm_code', label: '权限点编码', placeholder: '如 dataset:publish',
+          hint: '发布后不可修改；按钮节点必填' },
+        { name: 'route', label: '路由地址', placeholder: '/pages/xxx.html', span: 2 },
+        { name: 'icon', label: '图标标识', placeholder: 'database / folder / shield …' },
+        { name: 'sort_no', label: '排序', type: 'number', value: 10 },
+        { name: 'visible', label: '菜单可见', type: 'switch', value: 1 },
+        { name: 'status', label: '启用', type: 'switch', value: 1 },
+        { name: 'remark', label: '备注', type: 'textarea', span: 2, rows: 2 }
+      ],
+      data: row ? $.extend({}, row) : { parent_id: parentId || '0', visible: 1, status: 1, sort_no: 10 },
+      onSubmit: function (v) {
+        if (row) v.id = row.id;
+        return JD.post('/api/system/menu/save', v).then(function () {
+          JD.alert('保存成功', '菜单项已保存，侧边栏将在刷新后按新配置渲染', 'success');
+          load();
+          return true;
+        });
+      }
+    });
+  });
+}
+
+{% endblock %}
+
+{% block script %}
+<style>.jd-micon{width:14px;height:14px;vertical-align:-2px;margin-right:4px;color:var(--text-mute)}</style>
+{% endblock %}

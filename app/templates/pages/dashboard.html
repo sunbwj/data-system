@@ -1,0 +1,100 @@
+{% extends "layout.html" %}
+{% block title %}工作台 · 九豆高质量数据资产平台{% endblock %}
+{% block body %}
+<div class="jd-page">
+  <div class="jd-crumb">数据资产 <span>/</span> <b>工作台</b></div>
+
+  <div class="jd-card jd-mb12" style="background:linear-gradient(120deg,var(--primary),var(--primary-active));border:none;color:#fff">
+    <div class="jd-card__bd" style="display:flex;align-items:center;gap:20px;flex-wrap:wrap">
+      <div style="flex:1;min-width:260px">
+        <h2 style="font-size:19px;margin-bottom:8px" id="hello">你好</h2>
+        <div style="font-size:12.5px;color:rgba(255,255,255,.85);line-height:1.8">
+          平台正在为 <b id="cardDatasets">-</b> 个数据集、<b id="cardSamples">-</b> 条样本提供版本与质量治理服务，
+          质量门禁通过率 <b id="cardRate">-</b>。所有数据下载行为均已记入安全审计。
+        </div>
+      </div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap">
+        <a class="jd-btn" href="/pages/dataset.html" style="background:rgba(255,255,255,.16);border-color:rgba(255,255,255,.3);color:#fff">数据集目录</a>
+        <a class="jd-btn" href="/pages/quality.html" style="background:rgba(255,255,255,.16);border-color:rgba(255,255,255,.3);color:#fff">质量门禁</a>
+        <a class="jd-btn" href="/pages/inbox.html" style="background:#fff;border-color:#fff;color:var(--primary)">我的消息</a>
+      </div>
+    </div>
+  </div>
+
+  <div class="jd-stat-grid jd-mb12" id="stats"></div>
+
+  <div style="display:grid;grid-template-columns:1.4fr 1fr;gap:12px;margin-bottom:12px" id="row2">
+    <div class="jd-card">
+      <div class="jd-card__hd"><h3>最近更新</h3><a href="/pages/dataset.html">全部数据集 →</a></div>
+      <div class="jd-card__bd jd-card__bd--flush" id="recent"></div>
+    </div>
+    <div class="jd-card">
+      <div class="jd-card__hd"><h3>领域分布</h3><span class="sub">按数据集数量</span></div>
+      <div class="jd-card__bd" id="domains"></div>
+    </div>
+  </div>
+
+  <div class="jd-card">
+    <div class="jd-card__hd"><h3>质量趋势</h3><span class="sub">按创建日期统计版本平均分</span></div>
+    <div class="jd-card__bd" id="trend"></div>
+  </div>
+</div>
+{% endblock %}
+
+{% block init %}
+JD.get('/api/ds/stats').then(function (d) {
+  $('#hello').text('你好，' + d.userName + '，欢迎回到数据资产工作台');
+  var c = d.cards;
+  $('#cardDatasets').text(c.datasets);
+  $('#cardSamples').text(JD.fmtNum(c.samples));
+  $('#cardRate').text(c.passRate + '%');
+  var items = [
+    { label: '数据集总数', value: JD.fmtNum(c.datasets), hint: '个逻辑数据集', icon: 'database' },
+    { label: '版本快照', value: JD.fmtNum(c.versions), hint: '不可变版本', icon: 'layers' },
+    { label: '样本总量', value: JD.fmtNum(c.samples), hint: '条', icon: 'file' },
+    { label: '存储占用', value: c.sizeMb + ' MB', hint: '对象存储（内容寻址去重）', icon: 'folder' },
+    { label: '门禁通过', value: JD.fmtNum(c.pass), hint: '质量门禁 PASS', icon: 'shield' },
+    { label: '未读消息', value: JD.fmtNum(c.unread), hint: '站内信', icon: 'bell' }
+  ];
+  $('#stats').html(items.map(function (i) {
+    return '<div class="jd-stat"><div class="jd-stat__icon">' + JD.icon(i.icon) + '</div>' +
+      '<div class="jd-stat__label">' + i.label + '</div>' +
+      '<div class="jd-stat__value">' + i.value + '</div>' +
+      '<div class="jd-stat__hint">' + i.hint + '</div></div>';
+  }).join(''));
+
+  var rows = (d.recent || []).map(function (r) {
+    return '<tr><td><a href="/pages/dataset.html?id=' + r.id + '">' + JD.esc(r.dataset_name) + '</a>' +
+      '<div class="jd-hint">' + JD.esc(r.dataset_code) + ' · ' + JD.esc(r.owner_name || '-') + '</div></td>' +
+      '<td class="num">' + JD.fmtNum(r.sample_count) + '</td>' +
+      '<td>' + JD.qualityTag(r.quality_score, r.quality_status) + '</td>' +
+      '<td class="jd-hint">' + JD.fmtTime(r.updated_at) + '</td></tr>';
+  }).join('');
+  $('#recent').html('<table class="jd-table"><thead><tr><th>数据集</th><th class="num">样本</th><th>质量</th><th>更新</th></tr></thead><tbody>' +
+    (rows || '<tr><td colspan="4"><div class="jd-empty">暂无数据</div></td></tr>') + '</tbody></table>');
+
+  var max = Math.max.apply(null, (d.domains || []).map(function (x) { return x.cnt; }).concat([1]));
+  $('#domains').html((d.domains || []).map(function (x) {
+    var pct = Math.round(x.cnt / max * 100);
+    return '<div style="margin-bottom:12px"><div class="jd-flex" style="justify-content:space-between;margin-bottom:5px">' +
+      '<span>' + JD.label('ds_domain', x.domain_code) + '</span>' +
+      '<span class="jd-hint">' + x.cnt + ' 个</span></div>' +
+      '<div class="jd-progress"><i style="width:' + pct + '%"></i></div></div>';
+  }).join('') || '<div class="jd-empty">暂无数据</div>');
+
+  var trend = d.qualityTrend || [];
+  $('#trend').html(trend.length ? '<div style="display:flex;align-items:flex-end;gap:16px;height:164px;' +
+    'padding:0 6px 6px;border-bottom:1px dashed var(--border-light);overflow-x:auto">' +
+    trend.map(function (x) {
+      var h = Math.max(10, (x.avg_score || 0) / 100 * 118);
+      var col = (x.avg_score || 0) >= 90 ? 'var(--success)' :
+        ((x.avg_score || 0) >= 60 ? 'var(--warning)' : 'var(--danger)');
+      return '<div style="flex:0 0 58px;text-align:center">' +
+        '<div style="font-size:12px;font-weight:600;color:' + col + ';margin-bottom:5px">' +
+        (x.avg_score || 0) + '</div>' +
+        '<div style="height:' + h + 'px;border-radius:7px 7px 0 0;background:' + col +
+        ';opacity:.82;transition:height .3s"></div>' +
+        '<div class="jd-hint" style="margin-top:6px">' + String(x.d).slice(5) + '</div></div>';
+    }).join('') + '</div>' : '<div class="jd-empty">暂无版本数据</div>');
+});
+{% endblock %}

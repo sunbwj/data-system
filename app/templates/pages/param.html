@@ -1,0 +1,135 @@
+{% extends "layout.html" %}
+{% block title %}系统参数 · 九豆高质量数据资产平台{% endblock %}
+{% block body %}
+<div class="jd-page">
+  <div class="jd-crumb">系统管理 <span>/</span> <b>系统参数</b></div>
+
+  <div class="jd-notice jd-mb12">
+    参数改动<b>即时生效</b>：展示类（名称 / Logo / 版本 / 水印）由页面启动时读取；
+    约束类（上传大小限制、IP 黑白名单）在网关与上传接口双处强制校验，前端提示只是体验。
+  </div>
+
+  <div class="jd-toolbar">
+    <div class="jd-search">
+      <svg><use href="/static/img/icons.svg#i-search"></use></svg>
+      <input class="jd-input" id="kw" placeholder="参数键 / 说明">
+    </div>
+    <select class="jd-select" id="fGroup" style="width:170px">
+      <option value="">全部参数组</option>
+      <option value="app">应用信息 app</option>
+      <option value="security">安全 security</option>
+      <option value="upload">上传 upload</option>
+      <option value="mail">邮件 mail</option>
+      <option value="msg">消息 msg</option>
+    </select>
+    <button class="jd-btn jd-btn--primary" id="btnSearch">查询</button>
+    <button class="jd-btn" id="btnReset">重置</button>
+  </div>
+
+  <div class="jd-card jd-card__bd--flush">
+    <div id="ops"></div>
+    <div id="tbl"></div>
+  </div>
+</div>
+{% endblock %}
+
+{% block init %}
+var cache = {}, rowsAll = [], sel = null;
+
+var ops = JD.opsBar({
+  el: '#ops',
+  hint: '选中参数后可编辑 / 删除；约束类参数在请求入口强制生效',
+  actions: [
+    { icon: 'plus', text: '新增参数', type: 'primary', perm: 'sys:param:create',
+      onClick: function () { openForm(null); } },
+    { icon: 'edit', text: '编辑', needRow: true, perm: 'sys:param:edit',
+      onClick: function (r) { openForm(r); } },
+    { icon: 'trash', text: '删除', type: 'danger', needRow: true, perm: 'sys:param:delete',
+      onClick: function (r) { removeParam(r); } },
+    { icon: 'refresh', text: '刷新', onClick: function () { sel = null; load(); } }
+  ]
+});
+
+function load() {
+  var g = $('#fGroup').val(), kw = $.trim($('#kw').val());
+  JD.get('/api/system/param/list', { group: g }).then(function (rows) {
+    rowsAll = (rows || []).filter(function (r) {
+      return !kw || (r.param_key || '').indexOf(kw) > -1 || (r.remark || '').indexOf(kw) > -1;
+    });
+    cache = {};
+    rowsAll.forEach(function (r) { cache[r.id] = r; });
+    var body = rowsAll.map(function (r) {
+      var isLong = (r.param_value || '').length > 60;
+      return '<tr data-id="' + r.id + '"><td><span class="jd-code">' + JD.esc(r.param_key) + '</span>' +
+        '<div class="jd-hint">' + JD.esc(r.remark || '') + '</div></td>' +
+        '<td><span class="jd-tag">' + JD.esc(r.param_group) + '</span></td>' +
+        '<td style="max-width:420px;word-break:break-all">' + (isLong
+          ? '<span class="jd-hint">' + JD.esc((r.param_value || '').slice(0, 60)) + '…</span>'
+          : '<b>' + JD.esc(r.param_value || '-') + '</b>') + '</td>' +
+        '<td>' + JD.esc(r.value_type) + '</td>' +
+        '<td>' + (r.is_public === 1 ? '<span class="jd-tag jd-tag--success">公开</span>'
+          : '<span class="jd-tag">受控</span>') + '</td>' +
+        '<td class="jd-hint">' + JD.fmtTime(r.updated_at) + '</td></tr>';
+    }).join('');
+    $('#tbl').html('<div class="jd-table-wrap"><table class="jd-table"><thead><tr><th>参数键</th><th>分组</th>' +
+      '<th>参数值</th><th>类型</th><th>可见性</th><th>更新时间</th></tr></thead><tbody>' +
+      (body || '<tr><td colspan="6"><div class="jd-empty">暂无参数</div></td></tr>') + '</tbody></table></div>');
+    sel = null; ops.clear();
+  });
+}
+load();
+
+$('#tbl').on('click', 'tbody tr', function () {
+  var id = $(this).attr('data-id');
+  if (!id) return;
+  if (sel && sel.id === id) { sel = null; $(this).removeClass('is-selected'); ops.clear(); return; }
+  var row = cache[id];
+  if (!row) return;
+  row.__label = row.param_key;
+  sel = row;
+  $('#tbl tbody tr').removeClass('is-selected');
+  $(this).addClass('is-selected');
+  ops.select(row);
+});
+
+$('#btnSearch').on('click', load);
+$('#btnReset').on('click', function () { $('#kw').val(''); $('#fGroup').val(''); load(); });
+$('#kw').on('keydown', function (e) { if (e.key === 'Enter') load(); });
+
+function openForm(r) {
+  JD.formDialog({
+    title: r ? '编辑参数' : '新增参数', width: 'jd-dialog',
+    fields: [
+      { name: 'param_key', label: '参数键', required: true, readonly: !!r, span: 2,
+        placeholder: '如 app.name.zh' },
+      { name: 'param_group', label: '分组', type: 'select', required: true,
+        options: [{ value: 'app', label: 'app' }, { value: 'security', label: 'security' },
+          { value: 'upload', label: 'upload' }, { value: 'mail', label: 'mail' },
+          { value: 'msg', label: 'msg' }], value: 'app' },
+      { name: 'value_type', label: '值类型', type: 'select',
+        options: [{ value: 'string', label: 'string' }, { value: 'number', label: 'number' },
+          { value: 'bool', label: 'bool' }, { value: 'json', label: 'json' }] },
+      { name: 'param_value', label: '参数值', type: 'textarea', span: 2, rows: 3 },
+      { name: 'is_public', label: '未登录可读', type: 'switch' },
+      { name: 'remark', label: '说明', span: 2 }
+    ],
+    data: r || { value_type: 'string', is_public: 1 },
+    onSubmit: function (v) {
+      if (r) v.id = r.id;
+      return JD.post('/api/system/param/save', v).then(function () {
+        JD.alert('已保存', '参数已更新并即时生效', 'success');
+        load();
+        return true;
+      });
+    }
+  });
+}
+
+function removeParam(r) {
+  JD.confirm('删除参数', '删除「' + r.param_key + '」后引用该参数的功能将退回默认值，确定删除？',
+    { danger: true, okText: '删除' }).then(function (yes) {
+    if (!yes) return;
+    JD.post('/api/system/param/delete', { id: r.id }).then(function () { load(); });
+  });
+}
+{% endblock %}

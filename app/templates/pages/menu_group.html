@@ -1,0 +1,154 @@
+{% extends "layout.html" %}
+{% block title %}菜单组管理 · 九豆高质量数据资产平台{% endblock %}
+{% block body %}
+<div class="jd-page">
+  <div class="jd-crumb">系统管理 <span>/</span> <b>菜单组管理</b></div>
+
+  <div class="jd-notice jd-mb12">
+    菜单组按业务域把菜单项与按钮打包，角色授权时可直接「应用菜单组」再微调，
+    避免逐个勾选上百个权限点。<b>菜单项与菜单组是多对多</b>，同一页面可同时属于多个组。
+  </div>
+
+  <div class="jd-toolbar">
+    <div class="jd-search">
+      <svg><use href="/static/img/icons.svg#i-search"></use></svg>
+      <input class="jd-input" id="kw" placeholder="菜单组名称 / 编码">
+    </div>
+    <button class="jd-btn jd-btn--primary" id="btnSearch">查询</button>
+    <button class="jd-btn" id="btnReset">重置</button>
+    <span class="jd-hint" id="stat"></span>
+  </div>
+
+  <div class="jd-card jd-card__bd--flush">
+    <div id="ops"></div>
+    <div id="tbl"></div>
+  </div>
+</div>
+{% endblock %}
+
+{% block init %}
+var cache = {}, rowsAll = [], sel = null;
+
+var ops = JD.opsBar({
+  el: '#ops',
+  hint: '选中菜单组后可设置菜单项 / 编辑 / 删除',
+  actions: [
+    { icon: 'plus', text: '新增菜单组', type: 'primary', perm: 'sys:menu_group:create',
+      onClick: function () { openForm(null); } },
+    { icon: 'check-square', text: '设置菜单项', needRow: true, perm: 'sys:menu_group:item',
+      onClick: function (r) { setItems(r); } },
+    { icon: 'edit', text: '编辑', needRow: true, perm: 'sys:menu_group:edit',
+      onClick: function (r) { openForm(r); } },
+    { icon: 'trash', text: '删除', type: 'danger', needRow: true, perm: 'sys:menu_group:delete',
+      onClick: function (r) { removeGroup(r); } },
+    { icon: 'refresh', text: '刷新', onClick: function () { load(); } }
+  ]
+});
+
+function render(rows) {
+  var body = rows.map(function (r) {
+    return '<tr data-id="' + r.id + '"><td><b>' + JD.esc(r.group_name) + '</b><div class="jd-hint">' + JD.esc(r.group_code) + '</div></td>' +
+      '<td><span class="jd-tag jd-tag--primary">' + r.item_count + ' 个菜单项</span></td>' +
+      '<td class="jd-hint">' + JD.esc(r.remark || '-') + '</td>' +
+      '<td>' + (r.status === 1 ? '<span class="jd-tag jd-tag--success">启用</span>' : '<span class="jd-tag">停用</span>') + '</td></tr>';
+  }).join('');
+  $('#tbl').html('<div class="jd-table-wrap"><table class="jd-table"><thead><tr><th>菜单组</th><th>规模</th>' +
+    '<th>说明</th><th>状态</th></tr></thead><tbody>' +
+    (body || '<tr><td colspan="4"><div class="jd-empty">暂无菜单组</div></td></tr>') + '</tbody></table></div>');
+  sel = null; ops.clear();
+}
+
+function load() {
+  JD.get('/api/system/menu-group/list').then(function (rows) {
+    rowsAll = rows || [];
+    cache = {};
+    rowsAll.forEach(function (r) { cache[r.id] = r; });
+    filter();
+  });
+}
+
+function filter() {
+  var kw = $.trim($('#kw').val());
+  var rows = rowsAll.filter(function (r) {
+    return !kw || (r.group_name || '').indexOf(kw) > -1 || (r.group_code || '').indexOf(kw) > -1;
+  });
+  $('#stat').text('共 ' + rows.length + ' 个菜单组');
+  render(rows);
+}
+
+$('#btnSearch').on('click', filter);
+$('#btnReset').on('click', function () { $('#kw').val(''); filter(); });
+$('#kw').on('keydown', function (e) { if (e.key === 'Enter') filter(); });
+
+$('#tbl').on('click', 'tbody tr', function () {
+  var id = $(this).attr('data-id');
+  if (!id) return;
+  if (sel && sel.id === id) { sel = null; $(this).removeClass('is-selected'); ops.clear(); return; }
+  var row = cache[id];
+  if (!row) return;
+  row.__label = row.group_name;
+  sel = row;
+  $('#tbl tbody tr').removeClass('is-selected');
+  $(this).addClass('is-selected');
+  ops.select(row);
+});
+
+load();
+
+function openForm(r) {
+  JD.formDialog({
+    title: r ? '编辑菜单组' : '新增菜单组', width: 'jd-dialog',
+    fields: [
+      { name: 'group_code', label: '组编码', required: true, readonly: !!r, placeholder: '如 G_QC' },
+      { name: 'group_name', label: '组名称', required: true },
+      { name: 'sort_no', label: '排序', type: 'number', value: 10 },
+      { name: 'remark', label: '说明', type: 'textarea', span: 2, rows: 2 },
+      { name: 'status', label: '启用', type: 'switch', span: 2 }
+    ],
+    data: r || { status: 1, sort_no: 10 },
+    onSubmit: function (v) {
+      if (r) v.id = r.id;
+      return JD.post('/api/system/menu-group/save', v).then(function () {
+        JD.alert('保存成功', '菜单组已保存', 'success');
+        load();
+        return true;
+      });
+    }
+  });
+}
+
+function removeGroup(g) {
+  JD.confirm('删除菜单组', '删除「' + g.group_name + '」仅移除分组关系，不影响角色已授予的权限点。',
+    { danger: true, okText: '删除' }).then(function (yes) {
+    if (!yes) return;
+    JD.post('/api/system/menu-group/delete', { id: g.id }).then(function () { load(); });
+  });
+}
+
+function setItems(g) {
+  var gid = g.id;
+  Promise.all([JD.get('/api/system/menu/tree'), JD.get('/api/system/menu-group/items', { groupId: gid })])
+    .then(function (arr) {
+      var nodes = arr[0], checked = arr[1];
+      JD.dialog({
+        title: '设置菜单项 · ' + JD.esc(g.group_name || ''), width: 'jd-dialog--lg',
+        body: '<div class="jd-flex jd-mb8"><span class="jd-hint">勾选该组包含的菜单项与按钮</span>' +
+          '<span class="jd-grow"></span><button class="jd-btn jd-btn--sm" data-act="all">全选</button>' +
+          '<button class="jd-btn jd-btn--sm" data-act="none">清空</button></div>' +
+          '<div id="treeBox" style="max-height:52vh;overflow:auto;border:1px solid var(--border-light);border-radius:8px;padding:8px"></div>',
+        footer: '<button class="jd-btn" data-act="cancel">取消</button>' +
+          '<button class="jd-btn jd-btn--primary" data-act="save">保存</button>',
+        onOpen: function ($m, close) {
+          var api = JD.renderTree($m.find('#treeBox'), nodes, { checkable: true, checked: checked });
+          $m.on('click', '[data-act="all"]', function () { api.checkAll(true); });
+          $m.on('click', '[data-act="none"]', function () { api.checkAll(false); });
+          $m.on('click', '[data-act="cancel"]', close);
+          $m.on('click', '[data-act="save"]', function () {
+            JD.post('/api/system/menu-group/set-items', { groupId: gid, menuIds: api.getChecked() })
+              .then(function () { close(); load(); });
+          });
+        }
+      });
+    });
+}
+{% endblock %}

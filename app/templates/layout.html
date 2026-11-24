@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="{{ user.pref_theme or 'blue' }}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}九豆高质量数据资产平台{% endblock %}</title>
+  <link rel="icon" href="{{ boot.logo }}">
+  <link rel="stylesheet" href="/static/css/theme.css?v=1.0.5">
+  <link rel="stylesheet" href="/static/css/jd.css?v=1.0.5">
+  <script src="/static/vendor/jquery.min.js"></script>
+  <script src="/static/js/jd.js?v=1.0.5"></script>
+</head>
+<body>
+<div class="jd-watermark"></div>
+{% block body %}{% endblock %}
+<script>
+  window.JD_BOOT = {{ boot|tojson }};
+  window.JD_USER = {{ user|tojson }};
+  window.JD_PERMS = {{ perms|tojson }};
+  JD.init({ boot: JD_BOOT, user: JD_USER, perms: JD_PERMS }).then(function () {
+    if (JD_BOOT.watermark && JD_BOOT.watermark.enabled) {
+      JD.watermark(JD_BOOT.watermark.text + ' · ' + (JD_USER.real_name || ''));
+    }
+    JD.bindPerms(document);
+    {% block init %}{% endblock %}
+  });
+  // 框架页换肤后同步 iframe 内页面（背景/按钮/文字一并适配）
+  window.addEventListener('message', function (e) {
+    var d = e.data || {};
+    if (d.type === 'jd-theme' && d.theme) {
+      document.documentElement.setAttribute('data-theme', d.theme);
+      JD.state.theme = d.theme;
+      try { localStorage.setItem('jd_theme', d.theme); } catch (err) { }
+    }
+  });
+</script>
+{% block script %}{% endblock %}
+</body>
+</html>

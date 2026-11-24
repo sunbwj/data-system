@@ -1,0 +1,167 @@
+{% extends "layout.html" %}
+{% block title %}质量规则 · 九豆高质量数据资产平台{% endblock %}
+{% block body %}
+<div class="jd-page">
+  <div class="jd-crumb">数据资产 <span>/</span> <b>质量规则</b></div>
+
+  <div class="jd-notice jd-mb12">
+    <b>规则的两种等级</b>：硬性（HARD）不达标即判定 REJECT 并禁止发布；软性（SOFT）按权重参与加权计分。
+    表达式语法：完整性填字段名；值域填 <span class="jd-code">字段:min:max</span>；
+    枚举填 <span class="jd-code">字段:A|B|C</span>；格式填 <span class="jd-code">字段:email|mobile</span>。
+  </div>
+
+  <div class="jd-toolbar">
+    <select class="jd-select" id="fDs" style="width:240px"></select>
+    <div class="jd-search">
+      <svg><use href="/static/img/icons.svg#i-search"></use></svg>
+      <input class="jd-input" id="kw" placeholder="规则名称 / 编码 / 表达式">
+    </div>
+    <select class="jd-select" id="fSev" style="width:130px">
+      <option value="">全部等级</option>
+      <option value="HARD">硬性门禁</option>
+      <option value="SOFT">软性计分</option>
+    </select>
+    <button class="jd-btn jd-btn--primary" id="btnSearch">查询</button>
+    <button class="jd-btn" id="btnReset">重置</button>
+  </div>
+
+  <div class="jd-card jd-card__bd--flush" id="tbl"></div>
+</div>
+{% endblock %}
+
+{% block init %}
+var tbl, dsMap = {};
+
+JD.get('/api/ds/options').then(function (list) {
+  (list || []).forEach(function (o) { dsMap[o.id] = o.dataset_name; });
+  $('#fDs').html('<option value="">全部数据集（含全局规则）</option>' + (list || []).map(function (o) {
+    return '<option value="' + o.id + '">' + JD.esc(o.dataset_name) + '</option>';
+  }).join(''));
+});
+
+tbl = JD.table({
+  el: '#tbl', url: '/api/asset/rule/list', pageSize: 15,
+  columns: [
+    { field: 'rule_name', title: '规则', render: function (v, r) {
+      return '<b>' + JD.esc(v) + '</b><div class="jd-hint">' + JD.esc(r.rule_code) + '</div>';
+    }},
+    { field: 'dataset_name', title: '作用范围', width: 180, render: function (v) {
+      return v ? '<span class="jd-tag jd-tag--primary">' + JD.esc(v) + '</span>'
+        : '<span class="jd-tag">全局规则</span>';
+    }},
+    { field: 'rule_type', title: '类型', width: 100, render: function (v) { return JD.label('quality_rule_type', v); }},
+    { field: 'rule_expr', title: '表达式', render: function (v) {
+      return v ? '<span class="jd-code">' + JD.esc(v) + '</span>' : '<span class="jd-hint">-</span>';
+    }},
+    { field: 'severity', title: '等级', width: 100, render: function (v) {
+      return v === 'HARD' ? '<span class="jd-tag jd-tag--danger">硬性门禁</span>'
+        : '<span class="jd-tag jd-tag--info">软性计分</span>';
+    }},
+    { field: 'weight', title: '权重', width: 70, className: 'num' },
+    { field: 'threshold', title: '阈值', width: 80, className: 'num', render: function (v) {
+      return Number(v).toFixed(0) + '%';
+    }},
+    { field: 'fail_count', title: '历史未达标', width: 100, className: 'num', render: function (v) {
+      return v > 0 ? '<span class="jd-danger">' + v + '</span>' : '<span class="jd-success">0</span>';
+    }}
+  ],
+  ops: [
+    { icon: 'plus', text: '新增规则', type: 'primary', perm: 'quality:rule:edit',
+      onClick: function () { openForm(null); } },
+    { icon: 'edit', text: '编辑', needRow: true, perm: 'quality:rule:edit',
+      onClick: function (r) { openForm(r); } },
+    { icon: 'play', text: '试跑', needRow: true, perm: 'quality:rule:edit',
+      onClick: function (r) { testRule(r); } },
+    { icon: 'trash', text: '删除', type: 'danger', needRow: true, perm: 'quality:rule:edit',
+      onClick: function (r) { removeRule(r); } },
+    { icon: 'refresh', text: '刷新', onClick: function () { tbl.clearSelected(); tbl.reload(); } }
+  ],
+  hint: '选中规则后可编辑 / 用最近版本数据试跑 / 删除'
+});
+
+function query() {
+  tbl.setParams({ datasetId: $('#fDs').val(), keyword: $.trim($('#kw').val()),
+    severity: $('#fSev').val() });
+}
+$('#btnSearch').on('click', query);
+$('#btnReset').on('click', function () {
+  $('#fDs').val(''); $('#kw').val(''); $('#fSev').val(''); query();
+});
+$('#kw').on('keydown', function (e) { if (e.key === 'Enter') query(); });
+
+function openForm(r) {
+  JD.formDialog({
+    title: r ? '编辑质量规则' : '新增质量规则', width: 'jd-dialog',
+    fields: [
+      { name: 'rule_code', label: '规则编码', required: true, readonly: !!r,
+        value: 'R_' + Date.now().toString().slice(-6) },
+      { name: 'rule_name', label: '规则名称', required: true },
+      { name: 'dataset_id', label: '作用数据集', type: 'select', span: 2, placeholder: false,
+        options: [{ value: '', label: '全局规则（对所有数据集生效）' }].concat(
+          Object.keys(dsMap).map(function (k) { return { value: k, label: dsMap[k] }; })) },
+      { name: 'rule_type', label: '规则类型', type: 'select', required: true,
+        options: JD.dict('quality_rule_type') },
+      { name: 'rule_expr', label: '表达式', placeholder: '字段名 / 字段:min:max / 字段:A|B',
+        hint: '完整性=字段名；值域=字段:0:100；枚举=字段:A|B；格式=字段:email' },
+      { name: 'severity', label: '规则等级', type: 'select', required: true,
+        options: JD.dict('quality_severity'), value: 'SOFT' },
+      { name: 'weight', label: '权重', type: 'number', value: 10 },
+      { name: 'threshold', label: '达标阈值(%)', type: 'number', value: 100 },
+      { name: 'status', label: '启用', type: 'switch', span: 2, value: 1 }
+    ],
+    data: r || { dataset_id: $('#fDs').val(), severity: 'SOFT', weight: 10, threshold: 100, status: 1 },
+    onSubmit: function (v) {
+      if (r) v.id = r.id;
+      return JD.post('/api/ds/rule/save', v).then(function () {
+        JD.alert('已保存', '规则已保存，重新执行质量检查后生效', 'success');
+        tbl.reload();
+        return true;
+      });
+    }
+  });
+}
+
+function testRule(r) {
+  var did = r.dataset_id || $('#fDs').val();
+  if (!did) {
+    JD.alert('无法试跑', '全局规则需要先选择数据集，才能用该数据集最近版本的数据试跑。', 'warning');
+    return;
+  }
+  JD.loading(true, '正在试跑规则…');
+  JD.post('/api/asset/rule/test', {
+    dataset_id: did, rule_type: r.rule_type, rule_expr: r.rule_expr,
+    severity: r.severity, weight: r.weight, threshold: r.threshold,
+    rule_code: r.rule_code, rule_name: r.rule_name
+  }).then(function (d) {
+    JD.loading(false);
+    var okTag = d.passed ? '<span class="jd-tag jd-tag--success">达标</span>'
+      : '<span class="jd-tag jd-tag--danger">未达标</span>';
+    JD.dialog({
+      title: '规则试跑 · ' + r.rule_name, width: 'jd-dialog--lg',
+      body: '<div class="jd-flex jd-mb12">' + okTag +
+        '<span class="jd-hint">版本 ' + JD.esc(d.version) + ' · 文件 ' + JD.esc(d.file) + '</span>' +
+        '<span class="jd-grow"></span><b style="font-size:18px">' + Number(d.score).toFixed(2) + '</b></div>' +
+        '<div class="jd-progress jd-mb12"><i style="width:' + Math.min(100, d.score) + '%;background:' +
+        (d.passed ? 'var(--success)' : 'var(--danger)') + '"></i></div>' +
+        '<div class="jd-kv"><dt>样本行数</dt><dd>' + JD.fmtNum(d.row_count) + '</dd>' +
+        '<dt>字段数</dt><dd>' + (d.columns || []).length + '</dd>' +
+        '<dt>指标</dt><dd><span class="jd-code">' + JD.esc(JSON.stringify(d.metric)) + '</span></dd>' +
+        '<dt>失败样本</dt><dd><span class="jd-code">' +
+        JD.esc(JSON.stringify(d.samples || []).slice(0, 400)) + '</span></dd></div>',
+      footer: '<button class="jd-btn" data-act="close">关闭</button>',
+      onOpen: function ($m, close) { $m.on('click', '[data-act="close"]', close); }
+    });
+  }).catch(function () { JD.loading(false); });
+}
+
+function removeRule(r) {
+  JD.confirm('删除规则', '删除「' + r.rule_name + '」后该规则不再参与质量计算，需重新执行检查才生效。',
+    { danger: true, okText: '删除' }).then(function (yes) {
+    if (!yes) return;
+    JD.post('/api/ds/rule/delete', { id: r.id }).then(function () {
+      JD.alert('已删除', '规则已删除', 'success');
+      tbl.clearSelected(); tbl.reload();
+    });
+  });
+}
+{% endblock %}
